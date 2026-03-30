@@ -12,19 +12,20 @@ const Response = require('./models/Response');
 const GameState = require('./models/GameState');
 
 const app = express();
-app.use(cors());
+const frontendUrl = process.env.FRONTEND_URL || '*';
+app.use(cors({ origin: frontendUrl }));
 app.use(express.json());
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*', // In production, restrict this
+    origin: frontendUrl,
     methods: ['GET', 'POST']
   }
 });
 
 // Database Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/turing-test')
+mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
@@ -44,7 +45,7 @@ const broadcastState = async () => {
   const state = await syncGameState();
   const currentQuestion = await Question.findOne().skip(state.currentQuestionIndex).sort({ order: 1 });
   const totalQuestions = await Question.countDocuments();
-  
+
   const payload = {
     status: state.status,
     phase: state.phase, // New Phase field
@@ -67,7 +68,7 @@ const broadcastState = async () => {
     payload.currentQuestion.answerReasoning = currentQuestion.answerReasoning;
     payload.currentQuestion.purpose = currentQuestion.purpose;
   }
-  
+
   io.emit('state-update', payload);
 };
 
@@ -119,7 +120,7 @@ const autoSubmitMissing = async (questionIndex) => {
 const advanceQuestion = async () => {
   const state = await syncGameState();
   const totalQuestions = await Question.countDocuments();
-  
+
   if (state.phase === 'QUESTION') {
     // Admin manually clicked "Next" while timer was running -> Trigger Show Answer
     state.phase = 'RESULT';
@@ -203,13 +204,13 @@ io.on('connection', (socket) => {
       state.timerRemaining = 0;
       state.isPaused = false;
       await state.save();
-      
+
       // Clear Responses to start fresh on leaderboard
       await Response.deleteMany({});
-      
+
       // Clear the server gameTimer if it was running
       if (gameTimer) clearInterval(gameTimer);
-      
+
       // Announce the reset to all clients
       broadcastState();
     } catch (err) {
@@ -252,13 +253,13 @@ io.on('connection', (socket) => {
       if (state.status !== 'IN_PROGRESS' || state.timerRemaining <= 0 || state.phase !== 'QUESTION') {
         return socket.emit('error', 'Submissions are locked.');
       }
-      
+
       const response = await Response.findOneAndUpdate(
         { teamId: data.teamId, questionId: data.questionId },
         { ...data, timestamp: new Date() },
         { upsert: true, new: true }
       );
-      
+
       socket.emit('response-saved');
       // Notify admins of progress
       const teamCount = await Team.countDocuments();
@@ -307,11 +308,11 @@ app.get('/api/export-csv', async (req, res) => {
   try {
     const responses = await Response.find().populate('teamId').populate('questionId');
     let csv = 'Team Name,Room,Question Title,Selection,Confidence,Reasoning,Understanding,Timestamp\n';
-    
+
     responses.forEach(r => {
       csv += `"${r.teamId?.name || 'Unknown'}","${r.teamId?.room || ''}","${r.questionId?.title || ''}","${r.selection}","${r.confidence}","${r.reasoning.replace(/"/g, '""')}","${r.understanding.replace(/"/g, '""')}","${r.timestamp.toISOString()}"\n`;
     });
-    
+
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=results.csv');
     res.status(200).send(csv);
@@ -326,7 +327,7 @@ async function evaluateResponse(responseDoc, questionDoc) {
     console.warn('Skipping LLM scoring: GEMINI_API_KEY not set.');
     return;
   }
-  
+
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   const prompt = `You are a strict technical judge evaluating a student participant's reasoning in a coding game. 
   
@@ -353,12 +354,12 @@ Output STRICTLY valid JSON ONLY without any markdown blocks. Example: {"score": 
       contents: prompt,
       config: { responseMimeType: "application/json" }
     });
-    
+
     // New @google/genai SDK: result.text is a property, NOT a function
     const rawText = (result.text || '').replace(/```json/gi, '').replace(/```/gi, '').trim();
     console.log('LLM Raw Response:', rawText);
     const parsed = JSON.parse(rawText);
-    
+
     responseDoc.llmScore = typeof parsed.score === 'number' ? parsed.score : 0;
     responseDoc.llmReasoning = parsed.reasoning || "No reasoning provided by LLM.";
     await responseDoc.save();
@@ -423,11 +424,11 @@ app.get('/api/export-llm-csv', async (req, res) => {
   try {
     const responses = await Response.find().populate('teamId').populate('questionId');
     let csv = 'Team Name,Question Title,Correct Answer,Team Selection,LLM Score,LLM Reasoning\n';
-    
+
     responses.forEach(r => {
       csv += `"${r.teamId?.name || 'Unknown'}","${r.questionId?.title || ''}","${r.questionId?.correctOption || ''}","${r.selection}","${r.llmScore ?? 'Unscored'}","${(r.llmReasoning || '').replace(/"/g, '""')}"\n`;
     });
-    
+
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=llm-reasoning.csv');
     res.status(200).send(csv);

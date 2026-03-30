@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { useSocket } from '@/context/SocketContext';
 import styles from './admin.module.css';
 
-const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:5000';
+const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'https://turingtest-production.up.railway.app';
 
 interface Question {
   _id?: string;
@@ -232,10 +232,10 @@ export default function Admin() {
               {(gameState?.status === 'IN_PROGRESS' || gameState?.status === 'FINISHED') && (
                 <button className={styles.dangerBtn} onClick={() => setShowResetModal(true)}>Reset the round</button>
               )}
-              <button 
-                className={styles.dangerBtn} 
+              <button
+                className={styles.dangerBtn}
                 onClick={() => {
-                  if(confirm("Delete ALL teams and their responses? This cannot be undone.")) {
+                  if (confirm("Delete ALL teams and their responses? This cannot be undone.")) {
                     socket?.emit('admin-delete-teams');
                   }
                 }}

@@ -14,23 +14,34 @@ const GameState = require('./models/GameState');
 const app = express();
 
 // Handle CORS origins (production + local)
-const allowedOrigins = [
+const allowedBaseUrls = [
   (process.env.FRONTEND_URL || '').replace(/\/$/, ""),
-  (process.env.FRONTEND_URL || '').replace(/\/$/, "") + '/',
   'http://localhost:3000',
   'http://localhost:5173'
 ].filter(Boolean);
 
-// If no FRONTEND_URL is set, default to allow everything during setup
-const corsOrigin = allowedOrigins.length > 0 ? allowedOrigins : '*';
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    // Check if the origin (without trailing slash) matches any of our allowed base URLs
+    const normalizedOrigin = origin.replace(/\/$/, "");
+    if (allowedBaseUrls.indexOf(normalizedOrigin) !== -1 || !process.env.FRONTEND_URL) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+};
 
-app.use(cors({ origin: corsOrigin }));
+app.use(cors(corsOptions));
 app.use(express.json());
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: corsOrigin,
+    ...corsOptions,
     methods: ['GET', 'POST']
   }
 });

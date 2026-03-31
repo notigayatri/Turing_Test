@@ -8,7 +8,9 @@ export const SocketProvider = ({ children }: { children: React.ReactNode }) => {
   const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
-    const socketInstance = io(process.env.NEXT_PUBLIC_SERVER_URL || 'https://turingtest-production.up.railway.app');
+    const socketInstance = io(process.env.NEXT_PUBLIC_SERVER_URL || 'https://turingtest-production.up.railway.app', {
+      transports: ['websocket']
+    });
     setSocket(socketInstance);
 
     return () => {

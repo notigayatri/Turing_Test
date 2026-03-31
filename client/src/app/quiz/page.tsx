@@ -176,7 +176,7 @@ export default function Quiz() {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             className="premium-card"
-            style={{ maxWidth: 800, margin: '0 auto', textAlign: 'center', maxHeight: '85vh', overflowY: 'auto' }}
+            style={{ maxWidth: 800, margin: '0 auto', textAlign: 'center' }}
           >
             <div style={{ marginBottom: '2rem' }}>
               <h1 style={{ fontSize: '2.5rem' }}>

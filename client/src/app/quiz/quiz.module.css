@@ -1,8 +1,7 @@
 .quizLayout {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
   background: #050505;
 }
 
@@ -261,4 +260,13 @@
   align-items: center;
   justify-content: center;
   height: 100vh;
+}
+.resultContainer {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
 }

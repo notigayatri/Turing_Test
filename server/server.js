@@ -329,7 +329,7 @@ Output STRICTLY valid JSON only: {"purpose": "...", "reasoning": "..."}`;
           generationConfig: { responseMimeType: "application/json" }
         });
 
-        const rawText = (result.text || '').replace(/```json/gi, '').replace(/```/gi, '').trim();
+        const rawText = result.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim();
         const parsed = JSON.parse(rawText);
         
         if (parsed.purpose) data.purpose = parsed.purpose;
@@ -414,7 +414,7 @@ Output STRICTLY valid JSON ONLY without any markdown blocks. Example: {"score": 
       generationConfig: { responseMimeType: "application/json" }
     });
 
-    const rawText = (result.text || '').replace(/```json/gi, '').replace(/```/gi, '').trim();
+    const rawText = result.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim();
     console.log('LLM Scorer Response:', rawText);
     const parsed = JSON.parse(rawText);
 

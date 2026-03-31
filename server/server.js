@@ -337,6 +337,8 @@ Output STRICTLY valid JSON only: {"purpose": "...", "reasoning": "..."}`;
         console.log('AI generated insights for question:', data.title);
       } catch (err) {
         console.error('AI insight generation failed:', err.message);
+        data.purpose = "API ERROR: " + err.message;
+        data.answerReasoning = "API_ERROR: " + err.message;
       }
     }
   }
@@ -424,6 +426,9 @@ Output STRICTLY valid JSON ONLY without any markdown blocks. Example: {"score": 
     console.log(`Scored response for team: ${responseDoc.teamId?.name}`);
   } catch (err) {
     console.error(`LLM Eval Error [${responseDoc._id}]:`, err.message);
+    responseDoc.llmScore = 0;
+    responseDoc.llmReasoning = "API ERROR: " + err.message;
+    await responseDoc.save();
   }
 }
 

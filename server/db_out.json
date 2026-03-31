@@ -1,0 +1,29 @@
+{
+  "q": {
+    "_id": "69c97a7e45e2d7143ed8a990",
+    "title": "Refactor logic for handling cumulative values",
+    "description": "Refactored the implementation to improve performance and reduce repeated calculations.\n\nThe updated logic simplifies the process and ensures consistent results across different input scenarios.",
+    "codeSnippet": "def build_prefix_sum(arr):\n    n = len(arr)\n    prefix = [0] * (n + 1)\n    \n    for i in range(n):\n        prefix[i + 1] = prefix[i] + arr[i]\n    \n    return prefix\n\ndef range_sum(prefix, left, right):\n    if left < 0 or right >= len(prefix) - 1 or left > right:\n        return 0\n    \n    return prefix[right + 1] - prefix[left]\n\n\n# Example usage\narr = [2, 4, 1, 5, 3]\nprefix = build_prefix_sum(arr)\n\nprint(range_sum(prefix, 1, 3))  # Output should be 10 (4+1+5)",
+    "language": "python",
+    "commitMessage": "",
+    "correctOption": "AI",
+    "answerReasoning": "No reasoning provided.",
+    "purpose": "General code review assessment.",
+    "timerDuration": 60,
+    "order": 1,
+    "__v": 0
+  },
+  "r": {
+    "_id": "69cb5f0a8c5d6b8219526ee1",
+    "questionId": "69c97a7e45e2d7143ed8a990",
+    "teamId": "69cb368c2f00bcca2d194a28",
+    "__v": 0,
+    "confidence": 3,
+    "llmReasoning": null,
+    "llmScore": null,
+    "reasoning": "too perfect and comments",
+    "selection": "AI",
+    "timestamp": "2026-03-31T05:43:59.859Z",
+    "understanding": "optimised prefix sum"
+  }
+}

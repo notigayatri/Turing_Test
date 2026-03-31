@@ -312,7 +312,7 @@ app.post('/api/questions', async (req, res) => {
     if (process.env.GEMINI_API_KEY) {
       try {
         const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
         const prompt = `Analyze this code review question for a game. The question is whether this code was written by a Human or AI.
         
 Title: ${data.title}
@@ -387,7 +387,7 @@ async function evaluateResponse(responseDoc, questionDoc) {
   }
 
   const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
   const prompt = `You are a strict technical judge evaluating a student participant's reasoning in a coding game. 
   

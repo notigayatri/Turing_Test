@@ -62,7 +62,7 @@ Output JSON ONLY: {"purpose": "...", "reasoning": "..."}`;
           generationConfig: { responseMimeType: "application/json" }
         });
 
-        const rawText = (result.text || '').replace(/```json/gi, '').replace(/```/gi, '').trim();
+        const rawText = result.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim();
         const parsed = JSON.parse(rawText);
 
         q.purpose = parsed.purpose || q.purpose;

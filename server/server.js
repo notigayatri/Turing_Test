@@ -311,8 +311,8 @@ app.post('/api/questions', async (req, res) => {
   if (!data.answerReasoning || data.answerReasoning === 'No reasoning provided.' || !data.purpose || data.purpose === 'General code review assessment.') {
     if (process.env.GEMINI_API_KEY) {
       try {
-        const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' });
+        const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
         const prompt = `Analyze this code review question for a game. The question is whether this code was written by a Human or AI.
         
 Title: ${data.title}
@@ -388,8 +388,8 @@ async function evaluateResponse(responseDoc, questionDoc) {
     return;
   }
 
-  const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' });
+  const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
   const prompt = `You are a strict technical judge evaluating a student participant's reasoning in a coding game. 
   
@@ -499,5 +499,5 @@ app.get('/api/export-llm-csv', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server fully operational on port ${PORT}`);
+  console.log(`Server fully operational on port ${PORT}`);
 });

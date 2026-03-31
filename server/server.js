@@ -321,7 +321,7 @@ Code:
 ${data.codeSnippet}
 Correct Answer: ${data.correctOption}
 
-Generate 1) A clear "Purpose" of what this code does. 2) A technical "Reasoning" justifying why the answer is ${data.correctOption} (be specific about coding patterns).
+Generate 1) A clear "Purpose" of what this code does (MAX 2 LINES). 2) A technical "Reasoning" justifying why the answer is ${data.correctOption} (be specific about coding patterns, MAX 2 LINES).
 Output STRICTLY valid JSON only: {"purpose": "...", "reasoning": "..."}`;
 
         const result = await model.generateContent({
@@ -329,8 +329,11 @@ Output STRICTLY valid JSON only: {"purpose": "...", "reasoning": "..."}`;
           generationConfig: { responseMimeType: "application/json" }
         });
 
-        const rawText = result.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim();
-        const parsed = JSON.parse(rawText);
+        const rawOutput = result.response.text();
+        const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No JSON block found in AI response');
+        
+        const parsed = JSON.parse(jsonMatch[0]);
 
         if (parsed.purpose) data.purpose = parsed.purpose;
         if (parsed.reasoning) data.answerReasoning = parsed.reasoning;
@@ -408,7 +411,7 @@ Rate their reasoning from 0 to 10.
 - AI Code: Follows organized patterns, uses comments, is concise, and often utilizes optimized techniques.
 - Score highly (8-10) if the participant identifies these specific traits.
 - Score poorly (0-4) if their reasoning is vague, incorrect, or if they just repeat the purpose of the code without technical insight.
-Output STRICTLY valid JSON ONLY without any markdown blocks. Example: {"score": 8, "reasoning": "Identified that brute force loop is typical of student human code."}`;
+Output STRICTLY valid JSON ONLY without any markdown blocks. (MAX 2 LINES for "reasoning"). Example: {"score": 8, "reasoning": "Identified that brute force loop is typical of student human code."}`;
 
   try {
     const result = await model.generateContent({
@@ -416,11 +419,14 @@ Output STRICTLY valid JSON ONLY without any markdown blocks. Example: {"score": 
       generationConfig: { responseMimeType: "application/json" }
     });
 
-    const rawText = result.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim();
-    console.log('LLM Scorer Response:', rawText);
-    const parsed = JSON.parse(rawText);
+    const rawOutput = result.response.text();
+    const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON block found in AI score response');
+    
+    console.log('LLM Scorer Output:', jsonMatch[0]);
+    const parsed = JSON.parse(jsonMatch[0]);
 
-    responseDoc.llmScore = typeof parsed.score === 'number' ? parsed.score : 0;
+    responseDoc.llmScore = typeof parsed.score === 'number' ? parsed.score : (Number(parsed.score) || 0);
     responseDoc.llmReasoning = parsed.reasoning || "No reasoning provided by LLM.";
     await responseDoc.save();
     console.log(`Scored response for team: ${responseDoc.teamId?.name}`);

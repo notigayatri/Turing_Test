@@ -32,22 +32,10 @@ export default function Admin() {
   const socket = useSocket();
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  // Initialize auth state from sessionStorage to prevent login flash on refresh
-  const [isAuthorized, setIsAuthorized] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return !!sessionStorage.getItem('adminPwd');
-    }
-    return false;
-  });
+  const [isAuthorized, setIsAuthorized] = useState(false);
   const [gameState, setGameState] = useState<any>(null);
   const [submissions, setSubmissions] = useState({ submissionCount: 0, teamCount: 0 });
-  // Persist the active tab across refreshes
-  const [activeTab, setActiveTab] = useState<Tab>(() => {
-    if (typeof window !== 'undefined') {
-      return (sessionStorage.getItem('adminTab') as Tab) || 'control';
-    }
-    return 'control';
-  });
+  const [activeTab, setActiveTab] = useState<Tab>('control');
 
   // Question management
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -61,6 +49,14 @@ export default function Admin() {
 
   // Custom Modal
   const [showResetModal, setShowResetModal] = useState(false);
+
+  // Handle Client-Side state from SessionStorage (Hydration Fix)
+  useEffect(() => {
+    const savedPwd = sessionStorage.getItem('adminPwd');
+    const savedTab = sessionStorage.getItem('adminTab') as Tab;
+    if (savedPwd) setIsAuthorized(true);
+    if (savedTab) setActiveTab(savedTab);
+  }, []);
 
   // Save active tab to sessionStorage whenever it changes
   useEffect(() => {
@@ -409,10 +405,27 @@ export default function Admin() {
               <button
                 className={styles.startBtn}
                 onClick={async () => {
-                  setLoadingLb(true);
-                  const res = await fetch(`${SERVER_URL}/api/leaderboard`);
-                  setLeaderboard(await res.json());
-                  setLoadingLb(false);
+                  try {
+                    setLoadingLb(true);
+                    // Explicitly score responses first
+                    await fetch(`${SERVER_URL}/api/score-responses`, { method: 'POST' });
+                    // Then fetch leaderboard
+                    const res = await fetch(`${SERVER_URL}/api/leaderboard`);
+                    if (!res.ok) throw new Error('API Error');
+                    const data = await res.json();
+                    if (Array.isArray(data)) {
+                      setLeaderboard(data);
+                    } else {
+                      console.error('Leaderboard data is not an array:', data);
+                      setLeaderboard([]);
+                    }
+                  } catch (err) {
+                    console.error('Leaderboard fetch failed:', err);
+                    alert('Calculation failed. Please check the server logs.');
+                    setLeaderboard([]);
+                  } finally {
+                    setLoadingLb(false);
+                  }
                 }}
                 disabled={loadingLb}
               >
@@ -433,7 +446,7 @@ export default function Admin() {
                 </tr>
               </thead>
               <tbody>
-                {leaderboard.map((team: any, i) => (
+                {Array.isArray(leaderboard) && leaderboard.map((team: any, i) => (
                   <tr key={team.teamName}>
                     <td style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>#{i + 1}</td>
                     <td style={{ fontSize: '1.1rem' }}>{team.teamName}</td>

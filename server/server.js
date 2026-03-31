@@ -331,7 +331,7 @@ Output STRICTLY valid JSON only: {"purpose": "...", "reasoning": "..."}`;
 
         const rawText = result.response.text().replace(/```json/gi, '').replace(/```/gi, '').trim();
         const parsed = JSON.parse(rawText);
-        
+
         if (parsed.purpose) data.purpose = parsed.purpose;
         if (parsed.reasoning) data.answerReasoning = parsed.reasoning;
         console.log('AI generated insights for question:', data.title);
@@ -421,8 +421,9 @@ Output STRICTLY valid JSON ONLY without any markdown blocks. Example: {"score": 
     responseDoc.llmScore = typeof parsed.score === 'number' ? parsed.score : 0;
     responseDoc.llmReasoning = parsed.reasoning || "No reasoning provided by LLM.";
     await responseDoc.save();
+    console.log(`Scored response for team: ${responseDoc.teamId?.name}`);
   } catch (err) {
-    console.error('LLM Eval Error:', err.message);
+    console.error(`LLM Eval Error [${responseDoc._id}]:`, err.message);
   }
 }
 
@@ -438,13 +439,9 @@ app.post('/api/score-responses', async (req, res) => {
 // Calculate Leaderboard
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    // 1. Ensure all responses are scored
-    const unscored = await Response.find({ llmScore: null }).populate('questionId');
-    for (const r of unscored) {
-      if (r.questionId) await evaluateResponse(r, r.questionId);
-    }
+    // Note: AI-Scoring is now handled separately by /api/score-responses to prevent timeouts
 
-    // 2. Fetch all responses to compute scores
+    // 1. Fetch all responses to compute scores
     const allResponses = await Response.find().populate('teamId').populate('questionId');
     const teamScores = {}; // { teamId: { teamName, totalScore, details: [] } }
 

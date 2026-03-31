@@ -305,7 +305,43 @@ app.get('/api/questions', async (req, res) => {
 });
 
 app.post('/api/questions', async (req, res) => {
-  const question = new Question(req.body);
+  const data = req.body;
+
+  // Auto-generate Reasoning & Purpose via LLM if they are empty
+  if (!data.answerReasoning || data.answerReasoning === 'No reasoning provided.' || !data.purpose || data.purpose === 'General code review assessment.') {
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const ai = new GoogleGenAI(process.env.GEMINI_API_KEY);
+        const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const prompt = `Analyze this code review question for a game. The question is whether this code was written by a Human or AI.
+        
+Title: ${data.title}
+Language: ${data.language}
+Code:
+${data.codeSnippet}
+Correct Answer: ${data.correctOption}
+
+Generate 1) A clear "Purpose" of what this code does. 2) A technical "Reasoning" justifying why the answer is ${data.correctOption} (be specific about coding patterns).
+Output STRICTLY valid JSON only: {"purpose": "...", "reasoning": "..."}`;
+
+        const result = await model.generateContent({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        });
+
+        const rawText = (result.text || '').replace(/```json/gi, '').replace(/```/gi, '').trim();
+        const parsed = JSON.parse(rawText);
+        
+        if (parsed.purpose) data.purpose = parsed.purpose;
+        if (parsed.reasoning) data.answerReasoning = parsed.reasoning;
+        console.log('AI generated insights for question:', data.title);
+      } catch (err) {
+        console.error('AI insight generation failed:', err.message);
+      }
+    }
+  }
+
+  const question = new Question(data);
   await question.save();
   res.json(question);
 });
@@ -350,7 +386,9 @@ async function evaluateResponse(responseDoc, questionDoc) {
     return;
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI(process.env.GEMINI_API_KEY);
+  const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
   const prompt = `You are a strict technical judge evaluating a student participant's reasoning in a coding game. 
   
 Question: ${questionDoc.title}
@@ -371,15 +409,13 @@ Rate their reasoning from 0 to 10.
 Output STRICTLY valid JSON ONLY without any markdown blocks. Example: {"score": 8, "reasoning": "Identified that brute force loop is typical of student human code."}`;
 
   try {
-    const result = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: { responseMimeType: "application/json" }
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: "application/json" }
     });
 
-    // New @google/genai SDK: result.text is a property, NOT a function
     const rawText = (result.text || '').replace(/```json/gi, '').replace(/```/gi, '').trim();
-    console.log('LLM Raw Response:', rawText);
+    console.log('LLM Scorer Response:', rawText);
     const parsed = JSON.parse(rawText);
 
     responseDoc.llmScore = typeof parsed.score === 'number' ? parsed.score : 0;

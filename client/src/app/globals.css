@@ -7,6 +7,7 @@
   --success: #4caf50;
   --warning: #ff9800;
   --error: #f44336;
+  --danger: #f44336;   /* alias for --error, used in admin page */
   --glass: rgba(255, 255, 255, 0.05);
   --border: rgba(255, 255, 255, 0.1);
 }

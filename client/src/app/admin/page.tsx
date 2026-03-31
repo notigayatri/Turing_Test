@@ -1,9 +1,10 @@
 'use client';
-import { useState, useEffect } from 'react';
+
+import { useCallback, useEffect, useState } from 'react';
 import { useSocket } from '@/context/SocketContext';
 import styles from './admin.module.css';
 
-const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'https://turingtest-production.up.railway.app';
+const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:5000';
 
 interface Question {
   _id?: string;
@@ -14,6 +15,41 @@ interface Question {
   correctOption: 'Human' | 'AI';
   timerDuration: number;
   order: number;
+  answerReasoning?: string;
+  purpose?: string;
+}
+
+interface GameState {
+  status: 'LOBBY' | 'IN_PROGRESS' | 'FINISHED';
+  phase: 'QUESTION' | 'RESULT';
+  currentQuestionIndex: number;
+  timerRemaining: number;
+  isPaused: boolean;
+  totalQuestions: number;
+  currentQuestion: Question | null;
+}
+
+interface ResultRow {
+  teamId?: { name?: string; room?: string };
+  questionId?: { title?: string };
+  selection: 'Human' | 'AI' | 'None';
+  confidence: number;
+  reasoning: string;
+  understanding: string;
+  timestamp: string;
+}
+
+interface LeaderboardBreakdown {
+  qTitle: string;
+  isCorrect: boolean;
+  basePoints: number;
+  llmScore: number;
+}
+
+interface LeaderboardTeam {
+  teamName: string;
+  totalScore: number;
+  breakdowns: LeaderboardBreakdown[];
 }
 
 const emptyQuestion: Question = {
@@ -33,32 +69,23 @@ export default function Admin() {
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isAuthorized, setIsAuthorized] = useState(false);
-  const [gameState, setGameState] = useState<any>(null);
-  const [submissions, setSubmissions] = useState({ submissionCount: 0, teamCount: 0 });
+  const [gameState, setGameState] = useState<GameState | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('control');
-
-  // Question management
   const [questions, setQuestions] = useState<Question[]>([]);
   const [newQuestion, setNewQuestion] = useState<Question>(emptyQuestion);
   const [savingQ, setSavingQ] = useState(false);
-
-  // Results & Leaderboard
-  const [results, setResults] = useState<any[]>([]);
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [results, setResults] = useState<ResultRow[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardTeam[]>([]);
   const [loadingLb, setLoadingLb] = useState(false);
-
-  // Custom Modal
   const [showResetModal, setShowResetModal] = useState(false);
 
-  // Handle Client-Side state from SessionStorage (Hydration Fix)
   useEffect(() => {
     const savedPwd = sessionStorage.getItem('adminPwd');
-    const savedTab = sessionStorage.getItem('adminTab') as Tab;
+    const savedTab = sessionStorage.getItem('adminTab') as Tab | null;
     if (savedPwd) setIsAuthorized(true);
     if (savedTab) setActiveTab(savedTab);
   }, []);
 
-  // Save active tab to sessionStorage whenever it changes
   useEffect(() => {
     sessionStorage.setItem('adminTab', activeTab);
   }, [activeTab]);
@@ -66,31 +93,86 @@ export default function Admin() {
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('admin-authorized', () => {
+    const handleAuthorized = () => {
       setIsAuthorized(true);
       setLoginError('');
-    });
-    socket.on('admin-error', (msg) => {
+    };
+    const handleAdminError = (msg: string) => {
       setLoginError(msg);
       sessionStorage.removeItem('adminPwd');
       setIsAuthorized(false);
-    });
-    socket.on('state-update', (state) => setGameState(state));
-    socket.on('submission-progress', (data) => setSubmissions(data));
+    };
+    const handleStateUpdate = (state: GameState) => setGameState(state);
 
-    // Always re-auth with saved password to rejoin the 'admin' room on the socket
+    socket.on('admin-authorized', handleAuthorized);
+    socket.on('admin-error', handleAdminError);
+    socket.on('state-update', handleStateUpdate);
+
     const savedPwd = sessionStorage.getItem('adminPwd');
     if (savedPwd) {
       socket.emit('admin-join', savedPwd);
     }
 
     return () => {
-      socket.off('admin-authorized');
-      socket.off('admin-error');
-      socket.off('state-update');
-      socket.off('submission-progress');
+      socket.off('admin-authorized', handleAuthorized);
+      socket.off('admin-error', handleAdminError);
+      socket.off('state-update', handleStateUpdate);
     };
   }, [socket]);
+
+  const adminHeaders = useCallback(
+    (): HeadersInit => ({
+      'Content-Type': 'application/json',
+      'x-admin-secret': sessionStorage.getItem('adminPwd') || '',
+    }),
+    []
+  );
+
+  const fetchQuestions = useCallback(async () => {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/questions`, { headers: adminHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setQuestions(await res.json());
+    } catch (err) {
+      console.error('Failed to fetch questions:', err);
+    }
+  }, [adminHeaders]);
+
+  const fetchResults = useCallback(async () => {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/results`, { headers: adminHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setResults(await res.json());
+    } catch (err) {
+      console.error('Failed to fetch results:', err);
+    }
+  }, [adminHeaders]);
+
+  const exportWithAuth = useCallback(
+    async (path: string, filename: string) => {
+      const res = await fetch(`${SERVER_URL}${path}`, { headers: adminHeaders() });
+      if (!res.ok) {
+        throw new Error(`Export failed with status ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    },
+    [adminHeaders]
+  );
+
+  useEffect(() => {
+    if (!isAuthorized) return;
+    void fetchQuestions();
+    void fetchResults();
+  }, [fetchQuestions, fetchResults, isAuthorized]);
 
   const handleLogin = () => {
     setLoginError('');
@@ -109,46 +191,68 @@ export default function Admin() {
   const startQuiz = () => socket?.emit('admin-start');
   const togglePause = () => socket?.emit('admin-pause');
   const nextQuestion = () => socket?.emit('admin-next');
+
   const resetEvent = () => {
     socket?.emit('admin-reset');
     setShowResetModal(false);
-    // Clear local state since server wipes responses
     setResults([]);
     setLeaderboard([]);
   };
 
-  const fetchQuestions = async () => {
-    const res = await fetch(`${SERVER_URL}/api/questions`);
-    setQuestions(await res.json());
-  };
-
-  const fetchResults = async () => {
-    const res = await fetch(`${SERVER_URL}/api/results`);
-    setResults(await res.json());
-  };
-
-  useEffect(() => {
-    if (!isAuthorized) return;
-    fetchQuestions();
-    fetchResults();
-  }, [isAuthorized]);
-
   const saveQuestion = async () => {
     setSavingQ(true);
-    await fetch(`${SERVER_URL}/api/questions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newQuestion),
-    });
-    setNewQuestion(emptyQuestion);
-    await fetchQuestions();
-    setSavingQ(false);
+    try {
+      const res = await fetch(`${SERVER_URL}/api/questions`, {
+        method: 'POST',
+        headers: adminHeaders(),
+        body: JSON.stringify(newQuestion),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        alert(`Error saving question: ${err.error || res.status}`);
+      } else {
+        setNewQuestion(emptyQuestion);
+        await fetchQuestions();
+      }
+    } catch {
+      alert('Network error saving question.');
+    } finally {
+      setSavingQ(false);
+    }
   };
 
   const deleteQuestion = async (id: string, title: string) => {
     if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
-    await fetch(`${SERVER_URL}/api/questions/${id}`, { method: 'DELETE' });
-    await fetchQuestions();
+    try {
+      await fetch(`${SERVER_URL}/api/questions/${id}`, {
+        method: 'DELETE',
+        headers: adminHeaders(),
+      });
+      await fetchQuestions();
+    } catch {
+      alert('Failed to delete question.');
+    }
+  };
+
+  const refreshLeaderboard = async () => {
+    try {
+      setLoadingLb(true);
+      await fetch(`${SERVER_URL}/api/score-responses`, {
+        method: 'POST',
+        headers: adminHeaders(),
+      });
+      const res = await fetch(`${SERVER_URL}/api/leaderboard`);
+      if (!res.ok) throw new Error('API Error');
+      const data = await res.json();
+      setLeaderboard(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Leaderboard fetch failed:', err);
+      alert('Calculation failed. Please check the server logs.');
+      setLeaderboard([]);
+    } finally {
+      setLoadingLb(false);
+    }
   };
 
   if (!isAuthorized) {
@@ -156,8 +260,9 @@ export default function Admin() {
       <div className={styles.loginContainer}>
         <div className="premium-card" style={{ minWidth: 340 }}>
           <h2 style={{ marginBottom: '0.5rem' }}>Organizer Access</h2>
-          <p style={{ color: 'rgba(255,255,255,0.5)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>Enter the admin password to continue</p>
-
+          <p style={{ color: 'rgba(255,255,255,0.5)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+            Enter the admin password to continue
+          </p>
           <input
             type="password"
             placeholder="Admin Password"
@@ -166,10 +271,14 @@ export default function Admin() {
             onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
             style={{ width: '100%', marginBottom: '1rem', borderColor: loginError ? 'var(--danger)' : 'rgba(255,255,255,0.2)' }}
           />
-
-          {loginError && <p style={{ color: 'var(--danger)', fontSize: '0.9rem', marginBottom: '1rem', marginTop: '-0.5rem' }}>{loginError}</p>}
-
-          <button className={styles.startBtn} style={{ width: '100%', padding: '0.9rem' }} onClick={handleLogin}>Login</button>
+          {loginError && (
+            <p style={{ color: 'var(--danger)', fontSize: '0.9rem', marginBottom: '1rem', marginTop: '-0.5rem' }}>
+              {loginError}
+            </p>
+          )}
+          <button className={styles.startBtn} style={{ width: '100%', padding: '0.9rem' }} onClick={handleLogin}>
+            Login
+          </button>
         </div>
       </div>
     );
@@ -181,21 +290,24 @@ export default function Admin() {
         <h1>Organizer Dashboard</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
           <div className={styles.status}>
-            Status: <span className={styles[gameState?.status] || ''}>{gameState?.status || '...'}</span>
+            Status: <span className={styles[gameState?.status || 'LOBBY'] || ''}>{gameState?.status || '...'}</span>
           </div>
-          <button className={styles.logoutBtn} onClick={handleLogout}>Logout</button>
+          <button className={styles.logoutBtn} onClick={handleLogout}>
+            Logout
+          </button>
         </div>
       </header>
 
-      {/* Tabs */}
       <div className={styles.tabs}>
-        {(['control', 'questions', 'results', 'leaderboard'] as Tab[]).map(tab => (
+        {(['control', 'questions', 'results', 'leaderboard'] as Tab[]).map((tab) => (
           <button
             key={tab}
             className={`${styles.tab} ${activeTab === tab ? styles.activeTab : ''}`}
             onClick={() => {
               setActiveTab(tab);
-              if (tab === 'results') fetchResults();
+              if (tab === 'results') {
+                void fetchResults();
+              }
             }}
           >
             {tab === 'control' && 'Round Control'}
@@ -206,22 +318,21 @@ export default function Admin() {
         ))}
       </div>
 
-      {/* ---- TAB: ROUND CONTROL ---- */}
       {activeTab === 'control' && (
         <div className={styles.grid}>
           <section className="premium-card">
             <h3>Quiz Controls</h3>
             <div className={styles.controls}>
-              {gameState?.status === 'LOBBY' && (
-                <button className={styles.startBtn} onClick={startQuiz}>Start Round</button>
-              )}
+              {gameState?.status === 'LOBBY' && <button className={styles.startBtn} onClick={startQuiz}>Start Round</button>}
               {gameState?.status === 'IN_PROGRESS' && (
                 <>
-                  <button className={styles.pauseBtn} onClick={togglePause}>
-                    {gameState.isPaused ? 'Resume' : 'Pause'}
-                  </button>
+                  <button className={styles.pauseBtn} onClick={togglePause}>{gameState.isPaused ? 'Resume' : 'Pause'}</button>
                   <button className={styles.nextBtn} onClick={nextQuestion}>
-                    {gameState.phase === 'QUESTION' ? 'Show Results' : (gameState.currentQuestionIndex === questions.length - 1 ? 'End Event' : 'Next PR')}
+                    {gameState.phase === 'QUESTION'
+                      ? 'Show Results'
+                      : gameState.currentQuestionIndex === questions.length - 1
+                        ? 'End Event'
+                        : 'Next PR'}
                   </button>
                 </>
               )}
@@ -231,40 +342,39 @@ export default function Admin() {
               <button
                 className={styles.dangerBtn}
                 onClick={() => {
-                  if (confirm("Delete ALL teams and their responses? This cannot be undone.")) {
+                  if (confirm('Delete ALL teams and their responses? This cannot be undone.')) {
                     socket?.emit('admin-delete-teams');
                   }
                 }}
-                title="Deletes all Teams and Responses"
+                title="Deletes all teams and responses"
               >
                 Delete Teams Data
               </button>
               <button
                 className={styles.exportBtn}
-                onClick={() => window.open(`${SERVER_URL}/api/export-csv`)}
+                onClick={() => exportWithAuth('/api/export-csv', 'results.csv').catch(() => {
+                  alert('Failed to export responses.');
+                })}
               >
                 Export Responses CSV
               </button>
             </div>
           </section>
-
           <section className="premium-card">
             <h3>Live Stats</h3>
             <div className={styles.stats}>
               <div className={styles.statItem}>
                 <span className={styles.label}>Question</span>
-                <span className={styles.value}>{(gameState?.currentQuestionIndex ?? 0) + 1} / {gameState?.totalQuestions ?? '—'}</span>
+                <span className={styles.value}>{(gameState?.currentQuestionIndex ?? 0) + 1} / {gameState?.totalQuestions ?? '-'}</span>
               </div>
               <div className={styles.statItem}>
                 <span className={styles.label}>Timer</span>
-                <span className={`${styles.value} ${gameState?.timerRemaining < 60 ? styles.danger : ''}`}>
+                <span className={`${styles.value} ${gameState && gameState.timerRemaining < 60 ? styles.danger : ''}`}>
                   {Math.floor((gameState?.timerRemaining ?? 0) / 60)}:{((gameState?.timerRemaining ?? 0) % 60).toString().padStart(2, '0')}
                 </span>
               </div>
-              {/* Submissions removed per request */}
             </div>
           </section>
-
           <section className={`${styles.fullWidth} premium-card`}>
             <h3>Current Question Preview</h3>
             {gameState?.currentQuestion ? (
@@ -277,11 +387,10 @@ export default function Admin() {
         </div>
       )}
 
-      {/* ---- TAB: QUESTION MANAGER ---- */}
       {activeTab === 'questions' && (
         <div className={styles.qManager}>
           <section className="premium-card">
-            <h3>➕ Add New Question</h3>
+            <h3>Add New Question</h3>
             <div className={styles.qForm}>
               <div className={styles.row}>
                 <div className={styles.field}>
@@ -291,7 +400,7 @@ export default function Admin() {
                 <div className={styles.field}>
                   <label>Language</label>
                   <select value={newQuestion.language} onChange={(e) => setNewQuestion({ ...newQuestion, language: e.target.value })}>
-                    {['javascript', 'python', 'java', 'cpp', 'typescript', 'go', 'rust'].map(l => <option key={l} value={l}>{l}</option>)}
+                    {['javascript', 'python', 'java', 'cpp', 'typescript', 'go', 'rust'].map((language) => <option key={language} value={language}>{language}</option>)}
                   </select>
                 </div>
               </div>
@@ -307,17 +416,23 @@ export default function Admin() {
                 <div className={styles.field}>
                   <label>Correct Answer</label>
                   <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-                    {['Human', 'AI'].map(opt => (
+                    {(['Human', 'AI'] as const).map((option) => (
                       <button
-                        key={opt}
-                        onClick={() => setNewQuestion({ ...newQuestion, correctOption: opt as 'Human' | 'AI' })}
+                        key={option}
+                        onClick={() => setNewQuestion({ ...newQuestion, correctOption: option })}
                         style={{
-                          flex: 1, padding: '0.6rem', borderRadius: 8, border: '1px solid',
-                          borderColor: newQuestion.correctOption === opt ? 'var(--primary)' : 'var(--border)',
-                          background: newQuestion.correctOption === opt ? 'var(--primary)' : 'transparent',
-                          color: 'white', cursor: 'pointer'
+                          flex: 1,
+                          padding: '0.6rem',
+                          borderRadius: 8,
+                          border: '1px solid',
+                          borderColor: newQuestion.correctOption === option ? 'var(--primary)' : 'var(--border)',
+                          background: newQuestion.correctOption === option ? 'var(--primary)' : 'transparent',
+                          color: 'white',
+                          cursor: 'pointer'
                         }}
-                      >{opt}</button>
+                      >
+                        {option}
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -331,13 +446,12 @@ export default function Admin() {
                 </div>
               </div>
               <button className={styles.startBtn} onClick={saveQuestion} disabled={savingQ || !newQuestion.title}>
-                {savingQ ? 'Saving...' : '💾 Save Question'}
+                {savingQ ? 'Saving...' : 'Save Question'}
               </button>
             </div>
           </section>
-
           <section className="premium-card" style={{ marginTop: '2rem' }}>
-            <h3>📋 All Questions ({questions.length})</h3>
+            <h3>All Questions ({questions.length})</h3>
             <div className={styles.qList}>
               {questions.map((q, i) => (
                 <div key={q._id || i} className={styles.qItem}>
@@ -347,12 +461,8 @@ export default function Admin() {
                     <span className={q.correctOption === 'AI' ? styles.badgeAI : styles.badgeHuman}>{q.correctOption}</span>
                   </div>
                   <div className={styles.qTitle}>{q.title}</div>
-                  <div className={styles.qTimer}>⏱ {q.timerDuration}s</div>
-                  <button
-                    className={styles.deleteBtn}
-                    onClick={() => q._id && deleteQuestion(q._id, q.title)}
-                    title="Delete question"
-                  >🗑</button>
+                  <div className={styles.qTimer}>Timer {q.timerDuration}s</div>
+                  <button className={styles.deleteBtn} onClick={() => q._id && deleteQuestion(q._id, q.title)} title="Delete question">Delete</button>
                 </div>
               ))}
               {questions.length === 0 && <p style={{ color: 'rgba(255,255,255,0.4)', textAlign: 'center', padding: '2rem' }}>No questions yet. Add one above.</p>}
@@ -361,12 +471,13 @@ export default function Admin() {
         </div>
       )}
 
-      {/* ---- TAB: RESULTS ---- */}
       {activeTab === 'results' && (
         <div className={styles.resultsTab}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
             <h3>All Responses ({results.length})</h3>
-            <button className={styles.exportBtn} onClick={() => window.open(`${SERVER_URL}/api/export-csv`)}>⬇ Export CSV</button>
+            <button className={styles.exportBtn} onClick={() => exportWithAuth('/api/export-csv', 'results.csv').catch(() => {
+              alert('Failed to export responses.');
+            })}>Export CSV</button>
           </div>
           <div className={styles.tableWrap}>
             <table className={styles.table}>
@@ -374,16 +485,16 @@ export default function Admin() {
                 <tr><th>Team</th><th>Room</th><th>Question</th><th>Selection</th><th>Confidence</th><th>Reasoning</th><th>Understanding</th><th>Time</th></tr>
               </thead>
               <tbody>
-                {results.map((r, i) => (
-                  <tr key={i}>
-                    <td>{r.teamId?.name || '—'}</td>
-                    <td>{r.teamId?.room || '—'}</td>
-                    <td>{r.questionId?.title?.slice(0, 30) || '—'}…</td>
-                    <td><span className={r.selection === 'AI' ? styles.badgeAI : r.selection === 'Human' ? styles.badgeHuman : styles.badgeUnsure}>{r.selection}</span></td>
-                    <td>{r.confidence}/5</td>
-                    <td className={styles.truncate}>{r.reasoning}</td>
-                    <td className={styles.truncate}>{r.understanding}</td>
-                    <td style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)' }}>{new Date(r.timestamp).toLocaleTimeString()}</td>
+                {results.map((result, i) => (
+                  <tr key={`${result.timestamp}-${i}`}>
+                    <td>{result.teamId?.name || '-'}</td>
+                    <td>{result.teamId?.room || '-'}</td>
+                    <td>{result.questionId?.title ? `${result.questionId.title.slice(0, 30)}...` : '-'}</td>
+                    <td><span className={result.selection === 'AI' ? styles.badgeAI : result.selection === 'Human' ? styles.badgeHuman : styles.badgeUnsure}>{result.selection}</span></td>
+                    <td>{result.confidence}/5</td>
+                    <td className={styles.truncate}>{result.reasoning}</td>
+                    <td className={styles.truncate}>{result.understanding}</td>
+                    <td style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)' }}>{new Date(result.timestamp).toLocaleTimeString()}</td>
                   </tr>
                 ))}
               </tbody>
@@ -393,48 +504,22 @@ export default function Admin() {
         </div>
       )}
 
-      {/* ---- TAB: LEADERBOARD ---- */}
       {activeTab === 'leaderboard' && (
         <div className={styles.resultsTab}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
             <div>
-              <h3>🏆 AI-Graded Leaderboard</h3>
-              <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', marginTop: '0.3rem' }}>Scores are calculated automatically via Google Gemini based on the participants' reasoning.</p>
+              <h3>AI-Graded Leaderboard</h3>
+              <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', marginTop: '0.3rem' }}>Scores are calculated automatically via Google Gemini based on the participants&apos; reasoning.</p>
             </div>
             <div style={{ display: 'flex', gap: '1rem' }}>
-              <button
-                className={styles.startBtn}
-                onClick={async () => {
-                  try {
-                    setLoadingLb(true);
-                    // Explicitly score responses first
-                    await fetch(`${SERVER_URL}/api/score-responses`, { method: 'POST' });
-                    // Then fetch leaderboard
-                    const res = await fetch(`${SERVER_URL}/api/leaderboard`);
-                    if (!res.ok) throw new Error('API Error');
-                    const data = await res.json();
-                    if (Array.isArray(data)) {
-                      setLeaderboard(data);
-                    } else {
-                      console.error('Leaderboard data is not an array:', data);
-                      setLeaderboard([]);
-                    }
-                  } catch (err) {
-                    console.error('Leaderboard fetch failed:', err);
-                    alert('Calculation failed. Please check the server logs.');
-                    setLeaderboard([]);
-                  } finally {
-                    setLoadingLb(false);
-                  }
-                }}
-                disabled={loadingLb}
-              >
-                {loadingLb ? '🤖 Scoring w/ Gemini...' : '🔁 Refresh Rankings'}
+              <button className={styles.startBtn} onClick={() => void refreshLeaderboard()} disabled={loadingLb}>
+                {loadingLb ? 'Scoring with Gemini...' : 'Refresh Rankings'}
               </button>
-              <button className={styles.exportBtn} onClick={() => window.open(`${SERVER_URL}/api/export-llm-csv`)}>⬇ Export LLM Feedback</button>
+              <button className={styles.exportBtn} onClick={() => exportWithAuth('/api/export-llm-csv', 'llm-feedback.csv').catch(() => {
+                alert('Failed to export LLM feedback.');
+              })}>Export LLM Feedback</button>
             </div>
           </div>
-
           <div className={styles.tableWrap}>
             <table className={styles.table}>
               <thead>
@@ -446,16 +531,16 @@ export default function Admin() {
                 </tr>
               </thead>
               <tbody>
-                {Array.isArray(leaderboard) && leaderboard.map((team: any, i) => (
+                {leaderboard.map((team, i) => (
                   <tr key={team.teamName}>
                     <td style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>#{i + 1}</td>
                     <td style={{ fontSize: '1.1rem' }}>{team.teamName}</td>
                     <td style={{ color: 'var(--success)', fontWeight: 'bold' }}>{team.totalScore} pts</td>
                     <td style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.7)' }}>
-                      {team.breakdowns.map((b: any, j: number) => (
-                        <div key={j} style={{ marginBottom: '4px' }}>
-                          <span style={{ color: b.isCorrect ? 'var(--success)' : 'var(--error)' }}>{b.qTitle.slice(0, 15)}</span>:
-                          Base {b.basePoints} + LLM {b.llmScore}/10
+                      {team.breakdowns.map((breakdown, j) => (
+                        <div key={`${team.teamName}-${j}`} style={{ marginBottom: '4px' }}>
+                          <span style={{ color: breakdown.isCorrect ? 'var(--success)' : 'var(--error)' }}>{breakdown.qTitle.slice(0, 15)}</span>:
+                          Base {breakdown.basePoints} + LLM {breakdown.llmScore}/10
                         </div>
                       ))}
                     </td>
@@ -468,17 +553,16 @@ export default function Admin() {
         </div>
       )}
 
-      {/* ---- CUSTOM MODAL FOR RESET ---- */}
       {showResetModal && (
         <div className={styles.modalOverlay}>
           <div className={`${styles.modalContent} premium-card`} style={{ maxWidth: 450 }}>
-            <h3>⚠️ Confirm Reset</h3>
+            <h3>Confirm Reset</h3>
             <p style={{ color: 'rgba(255,255,255,0.8)', margin: '1rem 0 1.5rem', lineHeight: 1.5 }}>
-              Are you sure you want to reset the round? This will send everyone back to the Lobby.
+              Are you sure you want to reset the round? This will send everyone back to the lobby.
               <br /><br />
               <span style={{ color: 'var(--warning)' }}>All team responses and leaderboard scores will be cleared.</span>
               <br />
-              <span style={{ color: 'var(--success)' }}>Questions will NOT be deleted.</span>
+              <span style={{ color: 'var(--success)' }}>Questions will not be deleted.</span>
             </p>
             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
               <button className={styles.ghostBtn} onClick={() => setShowResetModal(false)}>Cancel</button>

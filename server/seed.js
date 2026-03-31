@@ -51,7 +51,11 @@ const sampleQuestions = [
 
 const seed = async () => {
   try {
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/turing-test');
+    if (!process.env.MONGODB_URI) {
+      console.error('ERROR: MONGODB_URI environment variable is not set.');
+      process.exit(1);
+    }
+    await mongoose.connect(process.env.MONGODB_URI);
     console.log('Connected to MongoDB');
 
     await Question.deleteMany({});

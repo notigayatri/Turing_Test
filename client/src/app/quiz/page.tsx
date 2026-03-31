@@ -1,5 +1,6 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSocket } from '@/context/SocketContext';
 import { useTeam } from '@/context/TeamContext';
@@ -16,80 +17,111 @@ SyntaxHighlighter.registerLanguage('javascript', js);
 SyntaxHighlighter.registerLanguage('python', py);
 SyntaxHighlighter.registerLanguage('cpp', cpp);
 
+type Selection = 'Human' | 'AI' | '';
+
+interface QuestionState {
+  _id: string;
+  title: string;
+  description: string;
+  codeSnippet: string;
+  language: string;
+  correctOption?: 'Human' | 'AI';
+  answerReasoning?: string;
+  purpose?: string;
+}
+
+interface GameState {
+  status: 'LOBBY' | 'IN_PROGRESS' | 'FINISHED';
+  phase: 'QUESTION' | 'RESULT';
+  currentQuestionIndex: number;
+  timerRemaining: number;
+  totalQuestions: number;
+  currentQuestion: QuestionState | null;
+}
+
+interface ResponseFormState {
+  selection: Selection;
+  confidence: number;
+  reasoning: string;
+  understanding: string;
+}
+
+const emptyForm: ResponseFormState = {
+  selection: '',
+  confidence: 3,
+  reasoning: '',
+  understanding: '',
+};
+
 export default function Quiz() {
   const socket = useSocket();
   const { teamId, teamName, roomNumber, isLoaded, logout } = useTeam();
   const router = useRouter();
 
-  const [gameState, setGameState] = useState<any>(null);
-  const [formData, setFormData] = useState({
-    selection: '',
-    confidence: 3,
-    reasoning: '',
-    understanding: ''
-  });
+  const [gameState, setGameState] = useState<GameState | null>(null);
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [formData, setFormData] = useState<ResponseFormState>(emptyForm);
   const [isLocked, setIsLocked] = useState(false);
 
-  // Activate anti-cheat when the quiz is in progress
   useAntiCheat(gameState?.status === 'IN_PROGRESS');
 
-  // Wait until localStorage is read before potentially redirecting
   useEffect(() => {
     if (!isLoaded) return;
     if (!teamName) {
       router.push('/join');
     }
-  }, [isLoaded, teamName, router]);
+  }, [isLoaded, router, teamName]);
 
-  // On refresh: re-emit join-team so the socket session is restored
   useEffect(() => {
     if (!socket || !teamId || !teamName) return;
     socket.emit('join-team', { teamName, roomNumber: roomNumber || '' });
-    socket.once('joined', () => {});
-  }, [socket, teamId, teamName, roomNumber]);
+  }, [roomNumber, socket, teamId, teamName]);
 
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('state-update', (state) => {
-      setGameState((prev: any) => {
-        // Reset form when question changes
+    const handleStateUpdate = (state: GameState) => {
+      setGameState((prev) => {
         if (prev?.currentQuestionIndex !== state.currentQuestionIndex) {
-          setFormData({ selection: '', confidence: 3, reasoning: '', understanding: '' });
+          setFormData(emptyForm);
           setIsLocked(false);
-          // Show "PR pulling" animation when question changes during the active round
           if (state.status === 'IN_PROGRESS') {
             setIsTransitioning(true);
-            setTimeout(() => setIsTransitioning(false), 2000);
+            window.setTimeout(() => setIsTransitioning(false), 2000);
           }
         }
         return state;
       });
-    });
+    };
 
-    socket.on('timer-tick', ({ timerRemaining }) => {
-      setGameState((prev: any) => ({ ...prev, timerRemaining }));
+    const handleTimerTick = ({ timerRemaining }: { timerRemaining: number }) => {
+      setGameState((prev) => (prev ? { ...prev, timerRemaining } : prev));
       if (timerRemaining <= 0) {
         setIsLocked(true);
       }
-    });
+    };
+
+    socket.on('state-update', handleStateUpdate);
+    socket.on('timer-tick', handleTimerTick);
 
     return () => {
-      socket.off('state-update');
-      socket.off('timer-tick');
+      socket.off('state-update', handleStateUpdate);
+      socket.off('timer-tick', handleTimerTick);
     };
   }, [socket]);
 
-  const autoSave = useCallback((updatedData: any) => {
+  const autoSave = (updatedData: ResponseFormState) => {
     if (!socket || !teamId || !gameState?.currentQuestion?._id || isLocked) return;
+    if (!updatedData.selection || !['Human', 'AI'].includes(updatedData.selection)) return;
+
     socket.emit('submit-response', {
       teamId,
       questionId: gameState.currentQuestion._id,
-      ...updatedData
+      ...updatedData,
     });
-  }, [socket, teamId, gameState?.currentQuestion?._id, isLocked]);
+  };
 
-  const handleInputChange = (field: string, value: any) => {
+  const handleInputChange = <K extends keyof ResponseFormState>(field: K, value: ResponseFormState[K]) => {
     if (isLocked) return;
     const newData = { ...formData, [field]: value };
     setFormData(newData);
@@ -101,15 +133,10 @@ export default function Quiz() {
     router.push('/join');
   };
 
-  const [isTransitioning, setIsTransitioning] = useState(false);
-
-  // Don't render anything until localStorage is read
   if (!isLoaded) return <div className={styles.loading}>Loading...</div>;
-
   if (!gameState) return <div className={styles.loading}>Connecting to session...</div>;
 
-  // Transition screen when admin pulls next PR
-  if (isTransitioning && gameState?.status === 'IN_PROGRESS') {
+  if (isTransitioning && gameState.status === 'IN_PROGRESS') {
     return (
       <div className={styles.lobbyWait}>
         <div className={styles.pullingBox}>
@@ -125,7 +152,9 @@ export default function Quiz() {
     return (
       <div className={styles.lobbyWait}>
         <div className="premium-card" style={{ maxWidth: 600, width: '100%', textAlign: 'center' }}>
-          <h2 className="gradient-text" style={{ fontSize: '2rem', marginBottom: '1rem' }}>Welcome, {teamName}!</h2>
+          <h2 className="gradient-text" style={{ fontSize: '2rem', marginBottom: '1rem' }}>
+            Welcome, {teamName}!
+          </h2>
           <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: '1.05rem', lineHeight: 1.6 }}>
             The round will begin shortly. Please wait for the organizer to start the event.
           </p>
@@ -135,12 +164,14 @@ export default function Quiz() {
               <li>You will be shown various Pull Requests (PRs).</li>
               <li>Decide if the author is <strong>Human</strong> or <strong>AI</strong>.</li>
               <li>Rate your confidence and explain your reasoning.</li>
-              <li>Scores are calculated automatically by an AI Judge!</li>
+              <li>Scores are calculated automatically by an AI Judge.</li>
               <li><strong>Do not refresh or switch tabs</strong> during a question.</li>
             </ul>
           </div>
           <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '1.5rem' }}>
-            <button className={styles.leaveBtn} onClick={handleLogout} style={{ marginTop: 0 }}>Leave Event</button>
+            <button className={styles.leaveBtn} onClick={handleLogout} style={{ marginTop: 0 }}>
+              Leave Event
+            </button>
           </div>
         </div>
       </div>
@@ -153,9 +184,13 @@ export default function Quiz() {
         <div className="premium-card">
           <h1 className="gradient-text">Event Finished</h1>
           <p style={{ margin: '1rem 0', color: 'rgba(255,255,255,0.6)' }}>
-            Thank you for participating, <strong>{teamName}</strong>!<br/>Results will be announced soon.
+            Thank you for participating, <strong>{teamName}</strong>!
+            <br />
+            Results will be announced soon.
           </p>
-          <button className={styles.leaveBtn} onClick={handleLogout}>Leave &amp; Logout</button>
+          <button className={styles.leaveBtn} onClick={handleLogout}>
+            Leave &amp; Logout
+          </button>
         </div>
       </div>
     );
@@ -163,7 +198,7 @@ export default function Quiz() {
 
   const { currentQuestion, timerRemaining, currentQuestionIndex, totalQuestions, phase } = gameState;
 
-  if (phase === 'RESULT') {
+  if (phase === 'RESULT' && currentQuestion) {
     return (
       <main className={styles.quizLayout}>
         <header className={styles.header}>
@@ -172,17 +207,18 @@ export default function Quiz() {
         </header>
 
         <div className={styles.resultContainer}>
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             className="premium-card"
             style={{ maxWidth: 800, margin: '0 auto', textAlign: 'center' }}
           >
             <div style={{ marginBottom: '2rem' }}>
-              <h1 style={{ fontSize: '2.5rem' }}>
-                The Correct Answer was:
-              </h1>
-              <div className={currentQuestion.correctOption === 'AI' ? styles.resultTagAI : styles.resultTagHuman} style={{ fontSize: '5rem', lineHeight: 1, marginTop: '1rem' }}>
+              <h1 style={{ fontSize: '2.5rem' }}>The Correct Answer was:</h1>
+              <div
+                className={currentQuestion.correctOption === 'AI' ? styles.resultTagAI : styles.resultTagHuman}
+                style={{ fontSize: '5rem', lineHeight: 1, marginTop: '1rem' }}
+              >
                 {currentQuestion.correctOption}
               </div>
             </div>
@@ -219,7 +255,6 @@ export default function Quiz() {
       </header>
 
       <div className={styles.content}>
-        {/* Left Side: PR Info */}
         <section className={styles.leftPanel}>
           <AnimatePresence mode="wait">
             <motion.div
@@ -230,14 +265,11 @@ export default function Quiz() {
               className={styles.questionCard}
             >
               <h2>{currentQuestion?.title}</h2>
-              <div className={styles.description}>
-                {currentQuestion?.description}
-              </div>
+              <div className={styles.description}>{currentQuestion?.description}</div>
             </motion.div>
           </AnimatePresence>
         </section>
 
-        {/* Right Side: Code & Inputs */}
         <section className={styles.rightPanel}>
           <div className={styles.codeContainer}>
             <SyntaxHighlighter
@@ -258,7 +290,7 @@ export default function Quiz() {
             <div className={styles.formGroup}>
               <label>Who authored this PR?</label>
               <div className={styles.radioGroup}>
-                {['Human', 'AI'].map(option => (
+                {(['Human', 'AI'] as const).map((option) => (
                   <button
                     key={option}
                     className={`${styles.radioBtn} ${formData.selection === option ? styles.active : ''}`}
@@ -274,7 +306,7 @@ export default function Quiz() {
             <div className={styles.formGroup}>
               <label>Confidence Rating (1-5)</label>
               <div className={styles.confidenceGroup}>
-                {[1, 2, 3, 4, 5].map(num => (
+                {[1, 2, 3, 4, 5].map((num) => (
                   <button
                     key={num}
                     className={`${styles.numBtn} ${formData.confidence === num ? styles.active : ''}`}

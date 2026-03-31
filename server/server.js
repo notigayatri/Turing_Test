@@ -12,14 +12,25 @@ const Response = require('./models/Response');
 const GameState = require('./models/GameState');
 
 const app = express();
-const frontendUrl = process.env.FRONTEND_URL || '*';
-app.use(cors({ origin: frontendUrl }));
+
+// Handle CORS origins (production + local)
+const allowedOrigins = [
+  (process.env.FRONTEND_URL || '').replace(/\/$/, ""),
+  (process.env.FRONTEND_URL || '').replace(/\/$/, "") + '/',
+  'http://localhost:3000',
+  'http://localhost:5173'
+].filter(Boolean);
+
+// If no FRONTEND_URL is set, default to allow everything during setup
+const corsOrigin = allowedOrigins.length > 0 ? allowedOrigins : '*';
+
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: frontendUrl,
+    origin: corsOrigin,
     methods: ['GET', 'POST']
   }
 });

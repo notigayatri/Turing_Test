@@ -4,7 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const { GoogleGenAI } = require('@google/genai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const Question = require('./models/Question');
 const Team = require('./models/Team');
@@ -311,7 +311,7 @@ app.post('/api/questions', async (req, res) => {
   if (!data.answerReasoning || data.answerReasoning === 'No reasoning provided.' || !data.purpose || data.purpose === 'General code review assessment.') {
     if (process.env.GEMINI_API_KEY) {
       try {
-        const ai = new GoogleGenAI(process.env.GEMINI_API_KEY);
+        const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
         const prompt = `Analyze this code review question for a game. The question is whether this code was written by a Human or AI.
         
@@ -386,7 +386,7 @@ async function evaluateResponse(responseDoc, questionDoc) {
     return;
   }
 
-  const ai = new GoogleGenAI(process.env.GEMINI_API_KEY);
+  const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
   const prompt = `You are a strict technical judge evaluating a student participant's reasoning in a coding game. 

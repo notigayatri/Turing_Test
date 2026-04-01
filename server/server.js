@@ -108,34 +108,44 @@ const startTimer = () => {
         clearInterval(gameTimer);
         state.phase = 'RESULT';
         await state.save();
-        await autoSubmitMissing(state.currentQuestionIndex);
+        const currentQ = await Question.findOne().skip(state.currentQuestionIndex).sort({ order: 1 });
+        if (currentQ) await autoSubmitMissing(currentQ._id);
         broadcastState();
       }
     }
   }, 1000);
 };
 
-const autoSubmitMissing = async (questionIndex) => {
-  const activeQuestion = await Question.findOne().skip(questionIndex).sort({ order: 1 });
-  if (!activeQuestion) return;
+const autoSubmitMissing = async (questionId) => {
+  try {
+    const allTeams = await Team.find();
+    if (!allTeams.length) return;
 
-  const allTeams = await Team.find();
-  for (const team of allTeams) {
-    const existing = await Response.findOne({ teamId: team._id, questionId: activeQuestion._id });
-    if (!existing) {
-      const emptyResponse = new Response({
-        teamId: team._id,
-        questionId: activeQuestion._id,
-        selection: 'None',
-        confidence: 1,
-        reasoning: 'No answer provided.',
-        understanding: 'No answer provided.',
-        llmScore: 0,
-        llmReasoning: 'No answer provided by team.',
-        timestamp: new Date()
-      });
-      await emptyResponse.save();
-    }
+    // Use a single bulkWrite to efficiently create missing responses for 75+ teams at once
+    const ops = allTeams.map(team => ({
+      updateOne: {
+        filter: { teamId: team._id, questionId: questionId },
+        update: {
+          $setOnInsert: {
+            teamId: team._id,
+            questionId: questionId,
+            selection: 'None',
+            confidence: 1,
+            reasoning: 'No answer provided.',
+            understanding: 'No answer provided.',
+            llmScore: 0,
+            llmReasoning: 'No answer provided by team.',
+            timestamp: new Date()
+          }
+        },
+        upsert: true
+      }
+    }));
+
+    await Response.bulkWrite(ops);
+    console.log(`Auto-submit finalized for ${allTeams.length} teams.`);
+  } catch (err) {
+    console.error('Auto-submit failed:', err.message);
   }
 };
 
@@ -148,7 +158,8 @@ const advanceQuestion = async () => {
     state.phase = 'RESULT';
     state.timerRemaining = 0;
     await state.save();
-    await autoSubmitMissing(state.currentQuestionIndex);
+    const currentQ = await Question.findOne().skip(state.currentQuestionIndex).sort({ order: 1 });
+    if (currentQ) await autoSubmitMissing(currentQ._id);
     broadcastState();
   } else if (state.phase === 'RESULT') {
     // Current question results finished -> Pull Next PR
@@ -272,7 +283,10 @@ io.on('connection', (socket) => {
   socket.on('submit-response', async (data) => {
     try {
       const state = await syncGameState();
-      if (state.status !== 'IN_PROGRESS' || state.timerRemaining <= 0 || state.phase !== 'QUESTION') {
+      // Allow a 2-second grace period for submissions after timer hits 0
+      const isGracePeriod = state.phase === 'RESULT' && state.timerRemaining <= 0;
+      
+      if (state.status !== 'IN_PROGRESS' || (!isGracePeriod && state.phase !== 'QUESTION')) {
         return socket.emit('error', 'Submissions are locked.');
       }
 
@@ -438,13 +452,33 @@ Output STRICTLY valid JSON ONLY without any markdown blocks. (MAX 2 LINES for "r
   }
 }
 
-// Manually trigger scoring
+// Manually trigger scoring with batching for 75+ teams
 app.post('/api/score-responses', async (req, res) => {
-  const responses = await Response.find({ llmScore: null }).populate('questionId');
-  for (const r of responses) {
-    if (r.questionId) await evaluateResponse(r, r.questionId);
+  try {
+    const responses = await Response.find({ llmScore: null }).populate('questionId');
+    if (!responses.length) return res.json({ success: true, scored: 0 });
+
+    console.log(`Starting scoring for ${responses.length} responses...`);
+    let count = 0;
+    
+    // Process in batches of 5 to stay under the Free Tier rate limits (15 RPM)
+    for (let i = 0; i < responses.length; i += 5) {
+      const batch = responses.slice(i, i + 5);
+      await Promise.all(batch.map(r => r.questionId ? evaluateResponse(r, r.questionId) : Promise.resolve()));
+      count += batch.length;
+      
+      // Wait 4 seconds between batches to safely stay under the 15 RPM limit
+      if (i + 5 < responses.length) {
+        console.log(`Batch finished. Waiting 4s before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, 4000));
+      }
+    }
+
+    res.json({ success: true, scored: count });
+  } catch (err) {
+    console.error('Manual scoring failure:', err.message);
+    res.status(500).json({ error: 'Scoring failed' });
   }
-  res.json({ success: true, scored: responses.length });
 });
 
 // Calculate Leaderboard

@@ -321,6 +321,12 @@ app.get('/api/questions', async (req, res) => {
 app.post('/api/questions', async (req, res) => {
   const data = req.body;
 
+  // Auto-increment order to ensure new questions appear at the end
+  if (!data.order || data.order === 1) {
+    const lastQ = await Question.findOne().sort({ order: -1 });
+    data.order = lastQ ? lastQ.order + 1 : 1;
+  }
+
   // Auto-generate Reasoning & Purpose via LLM if they are empty
   if (!data.answerReasoning || data.answerReasoning === 'No reasoning provided.' || !data.purpose || data.purpose === 'General code review assessment.') {
     if (process.env.GEMINI_API_KEY) {

@@ -115,7 +115,7 @@ export default function Quiz() {
         <div className={styles.pullingBox}>
           <div className={styles.scanner}></div>
           <h2 className="gradient-text">PULLING NEW PR...</h2>
-          <p style={{ color: 'rgba(255,255,255,0.4)', marginTop: '0.5rem' }}>Fetching source code and commit history</p>
+          <p style={{ color: 'rgba(255,255,255,0.4)', marginTop: '0.5rem' }}>Preparing a new PR for you...</p>
         </div>
       </div>
     );

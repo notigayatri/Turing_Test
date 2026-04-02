@@ -285,7 +285,7 @@ io.on('connection', (socket) => {
       const state = await syncGameState();
       // Allow a 2-second grace period for submissions after timer hits 0
       const isGracePeriod = state.phase === 'RESULT' && state.timerRemaining <= 0;
-      
+
       if (state.status !== 'IN_PROGRESS' || (!isGracePeriod && state.phase !== 'QUESTION')) {
         return socket.emit('error', 'Submissions are locked.');
       }
@@ -352,7 +352,7 @@ Output STRICTLY valid JSON only: {"purpose": "...", "reasoning": "..."}`;
         const rawOutput = result.response.text();
         const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
         if (!jsonMatch) throw new Error('No JSON block found in AI response');
-        
+
         const parsed = JSON.parse(jsonMatch[0]);
 
         if (parsed.purpose) data.purpose = parsed.purpose;
@@ -414,35 +414,37 @@ async function evaluateResponse(responseDoc, questionDoc) {
   const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, { apiVersion: 'v1' });
   const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-  const prompt = `You are a strict technical judge evaluating a student participant's reasoning in a coding game. 
-  
-Question: ${questionDoc.title}
+  const prompt = `You are a strict, completely unbiased, and deterministic technical judge grading a student participant's answer in a Turing Test coding game.
+
+Context: 
+Question: "${questionDoc.title}"
 Code (${questionDoc.language}):
 ${questionDoc.codeSnippet.substring(0, 1000)}
 
-Participant Selection: ${responseDoc.selection} (Did they choose Human or AI?)
-Participant Confidence (1-5): ${responseDoc.confidence}
-Participant Reasoning: "${responseDoc.reasoning}"
-Participant Understanding of Code: "${responseDoc.understanding}"
+Student's Answer:
+Selection: ${responseDoc.selection || "None"}
+Confidence Level: ${responseDoc.confidence} (out of 5)
+Reasoning: "${responseDoc.reasoning}"
+Understanding of Code: "${responseDoc.understanding}"
 
-Rate their reasoning from 0 to 10.
-- Judge their reasoning from a STUDENT coding perspective. 
-- Human/Student Code: Usually involves brute force, lacks comments, and writes more lines than necessary for simple tasks.
-- AI Code: Follows organized patterns, uses comments, is concise, and often utilizes optimized techniques.
-- Score highly (8-10) if the participant identifies these specific traits.
-- Score poorly (0-4) if their reasoning is vague, incorrect, or if they just repeat the purpose of the code without technical insight.
-Output STRICTLY valid JSON ONLY without any markdown blocks. (MAX 2 LINES for "reasoning"). Example: {"score": 8, "reasoning": "Identified that brute force loop is typical of student human code."}`;
+GRADING RUBRIC (Assign a score from 0 to 10 strictly based on this criteria, accounting for confidence):
+- Score 0: They did not provide an answer or the reasoning is entirely incorrect and contradicts the code.
+- Score 2-4: The reasoning is generic with no specific reference to the code provided. High confidence (4-5) on a generic answer should lean closer to 2; low confidence (1-2) can lean toward 4.
+- Score 5-7: They correctly identify basic traits (e.g., naming, loops) but lack deeper technical depth.
+- Score 8-10: They offer precise, technically sound reasoning. A high confidence (4-5) combined with precise reasoning earns a 9-10. Low confidence on good reasoning earns an 8.
+
+You MUST be objective. Output STRICTLY valid JSON ONLY. (MAX 2 LINES for "reasoning"). Example: {"score": 8, "reasoning": "Properly identified that the brute-force methodology is typical of inexperienced students, albeit with low confidence."}`;
 
   try {
     const result = await model.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: "application/json" }
+      generationConfig: { responseMimeType: "application/json", temperature: 0 }
     });
 
     const rawOutput = result.response.text();
     const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON block found in AI score response');
-    
+
     console.log('LLM Scorer Output:', jsonMatch[0]);
     const parsed = JSON.parse(jsonMatch[0]);
 
@@ -466,13 +468,13 @@ app.post('/api/score-responses', async (req, res) => {
 
     console.log(`Starting scoring for ${responses.length} responses...`);
     let count = 0;
-    
+
     // Process in batches of 5 to stay under the Free Tier rate limits (15 RPM)
     for (let i = 0; i < responses.length; i += 5) {
       const batch = responses.slice(i, i + 5);
       await Promise.all(batch.map(r => r.questionId ? evaluateResponse(r, r.questionId) : Promise.resolve()));
       count += batch.length;
-      
+
       // Wait 4 seconds between batches to safely stay under the 15 RPM limit
       if (i + 5 < responses.length) {
         console.log(`Batch finished. Waiting 4s before next batch...`);

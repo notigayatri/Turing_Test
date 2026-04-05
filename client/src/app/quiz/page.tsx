@@ -180,7 +180,7 @@ export default function Quiz() {
                 borderRadius: '12px'
               }}
             >
-              📊 {gameState.showFinalLeaderboard ? 'View Final Rankings' : 'Leaderboard Pending...'}
+              {gameState.showFinalLeaderboard ? 'View Final Rankings' : 'Leaderboard Pending...'}
             </button>
             <button className={styles.leaveBtn} onClick={handleLogout} style={{ opacity: 0.7, border: '1px solid rgba(255,255,255,0.1)' }}>Logout from Event</button>
           </div>

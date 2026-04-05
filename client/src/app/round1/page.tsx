@@ -187,7 +187,7 @@ export default function Round1() {
           </p>
           {showLeaderboard && leaderboard.length > 0 && (
             <div className={styles.leaderboard} style={{ padding: 0, marginBottom: '2rem' }}>
-              <div className={styles.lbTitle} style={{ color: '#f97316' }}>🏆 Round 1 Rankings</div>
+              <div className={styles.lbTitle} style={{ color: '#f97316' }}>Round 1 Rankings</div>
               {leaderboard.map((t, i) => (
                 <div key={i} className={styles.lbRow}>
                   <span className={`${styles.lbRank} ${i === 0 ? styles.top1 : i === 1 ? styles.top2 : i === 2 ? styles.top3 : ''}`}>
@@ -248,7 +248,6 @@ export default function Round1() {
             >
               {noAnswer ? (
                 <>
-                  <div style={{ fontSize: '2.8rem', marginBottom: '0.5rem' }}>⏰</div>
                   <div style={{ fontSize: '1.3rem', fontWeight: 700, color: 'rgba(255,255,255,0.7)', marginBottom: '1rem' }}>Time&apos;s up — no answer recorded</div>
                 </>
               ) : isRight ? (
@@ -302,7 +301,7 @@ export default function Round1() {
                   style={t.teamName === teamName ? { borderColor: 'rgba(0,112,243,0.4)', background: 'rgba(0,112,243,0.07)' } : {}}
                 >
                   <span className={`${styles.lbRank} ${i === 0 ? styles.top1 : i === 1 ? styles.top2 : i === 2 ? styles.top3 : ''}`}>
-                    {i === 0 ? '' : i === 1 ? '' : i === 2 ? '' : `#${i + 1}`}
+                    {i === 0 ? '#1' : i === 1 ? '#2' : i === 2 ? '#3' : `#${i + 1}`}
                   </span>
                   <span className={styles.lbTeam}>{t.teamName}</span>
                   <span className={styles.lbCorrect}>{t.correct}/{t.answered} </span>
@@ -450,7 +449,7 @@ export default function Round1() {
       {/* Locked banner */}
       {isLocked && !submitted && phase === 'QUESTION' && (
         <div className={styles.lockedBanner}>
-          ⏰ Time&apos;s Up — Submissions Locked
+          Time&apos;s Up — Submissions Locked
         </div>
       )}
     </div>

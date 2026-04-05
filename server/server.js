@@ -404,6 +404,7 @@ io.on('connection', (socket) => {
       await R1Response.deleteMany({});
       if (r1Timer) clearTimeout(r1Timer);
       broadcastR1State();
+      io.emit('redirect-home');
     } catch (err) { console.error('r1-admin-reset error:', err); }
   });
 

@@ -32,8 +32,8 @@ export default function Lobby() {
   return (
     <main className={styles.container}>
       <div className="premium-card" style={{ maxWidth: 440, width: '100%' }}>
-        <h1 className="gradient-text" style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>Turing Test</h1>
-        <p className={styles.subtitle} style={{ marginBottom: '1.75rem' }}>Enter your team details to join the event</p>
+        <h1 className="gradient-text" style={{ fontSize: '3rem', marginBottom: '0.25rem' }}>Turing Test</h1>
+        <p className={styles.subtitle} style={{ marginBottom: '1.75rem', fontSize: '0.85rem' }}>Enter your team details to join the event</p>
 
         <div className={styles.inputGroup}>
           <label>Team Name</label>

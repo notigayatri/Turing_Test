@@ -6,6 +6,7 @@ const GameStateSchema = new mongoose.Schema({
   currentQuestionIndex: { type: Number, default: 0 },
   timerRemaining: { type: Number, default: 0 },
   isPaused: { type: Boolean, default: false },
+  showFinalLeaderboard: { type: Boolean, default: false },
   lastUpdated: { type: Date, default: Date.now }
 });
 

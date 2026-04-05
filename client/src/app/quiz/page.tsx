@@ -63,22 +63,27 @@ export default function Quiz() {
             setTimeout(() => setIsTransitioning(false), 2000);
           }
         }
+        setIsLocked(state.phase === 'RESULT' || state.timerRemaining <= 0);
         return state;
       });
     });
 
     socket.on('timer-tick', ({ timerRemaining }) => {
       setGameState((prev: any) => ({ ...prev, timerRemaining }));
-      if (timerRemaining <= 0) {
-        setIsLocked(true);
-      }
+      setIsLocked(timerRemaining <= 0);
     });
 
-    return () => {
-      socket.off('state-update');
-      socket.off('timer-tick');
-    };
-  }, [socket]);
+      socket.on('redirect-home', () => {
+        localStorage.clear();
+        router.push('/');
+      });
+
+      return () => {
+        socket.off('state-update');
+        socket.off('timer-tick');
+        socket.off('redirect-home');
+      };
+    }, [socket, router]);
 
   const autoSave = useCallback((updatedData: any) => {
     if (!socket || !teamId || !gameState?.currentQuestion?._id || isLocked) return;
@@ -123,23 +128,23 @@ export default function Quiz() {
 
   if (gameState.status === 'LOBBY') {
     return (
-      <div className={styles.lobbyWait}>
-        <div className="premium-card" style={{ maxWidth: 600, width: '100%', textAlign: 'center' }}>
-          <h2 className="gradient-text" style={{ fontSize: '2rem', marginBottom: '1rem' }}>Welcome, {teamName}!</h2>
-          <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: '1.05rem', lineHeight: 1.6 }}>
-            The round will begin shortly. Please wait for the organizer to start the event.
-          </p>
-          <div className={styles.instructionsBox}>
-            <h4 style={{ color: 'var(--primary)', marginBottom: '0.5rem' }}>How to play:</h4>
-            <ul style={{ textAlign: 'left', color: 'rgba(255,255,255,0.7)', fontSize: '0.95rem', lineHeight: 1.5, paddingLeft: '1.5rem' }}>
-              <li>You will be shown various Pull Requests (PRs).</li>
-              <li>Decide if the author is <strong>Human</strong> or <strong>AI</strong>.</li>
-              <li>Rate your confidence and explain your reasoning.</li>
-              <li>Scores are calculated automatically by an AI Judge!</li>
-              <li><strong>Do not refresh or switch tabs</strong> during a question.</li>
+      <div className={styles.lobbyWait} style={{ paddingTop: '5vh' }}>
+        <div className="premium-card" style={{ maxWidth: 640, width: '100%', textAlign: 'center' }}>
+          <h2 className="gradient-text" style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>Round 2: PR Detection</h2>
+          <div style={{ color: 'var(--primary)', fontSize: '1rem', marginBottom: '2rem', textTransform: 'uppercase', letterSpacing: '0.2em', fontWeight: 800 }}>
+             Turing Test - Analytical Evaluation
+          </div>
+          <div className={styles.instructionsBox} style={{ borderRadius: '12px', background: 'rgba(255,255,255,0.03)', padding: '1.5rem' }}>
+            <h4 style={{ color: 'var(--primary)', marginBottom: '1rem', fontSize: '1.1rem' }}>Rules of Engagement:</h4>
+            <ul style={{ textAlign: 'left', color: 'rgba(255,255,255,0.8)', fontSize: '1rem', lineHeight: 1.7, paddingLeft: '1.5rem' }}>
+              <li>Evaluate: Review complex <strong>Pull Requests (PRs)</strong> in detail.</li>
+              <li>Detect: Determine if the author is a <strong>Human</strong> or <strong>AI</strong>.</li>
+              <li>Insight: Provide technical reasoning and your confidence level.</li>
+              <li>AI Judge: Scores are derived from the logic and depth of your explanation.</li>
+              <li>Persistence: <strong>Do not refresh or switch tabs</strong> once a PR is revealed.</li>
             </ul>
           </div>
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '1.5rem' }}>
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '2.5rem' }}>
             <button className={styles.leaveBtn} onClick={handleLogout} style={{ marginTop: 0 }}>Leave Event</button>
           </div>
         </div>
@@ -149,13 +154,36 @@ export default function Quiz() {
 
   if (gameState.status === 'FINISHED') {
     return (
-      <div className={styles.lobbyWait}>
-        <div className="premium-card">
-          <h1 className="gradient-text">Event Finished</h1>
-          <p style={{ margin: '1rem 0', color: 'rgba(255,255,255,0.6)' }}>
-            Thank you for participating, <strong>{teamName}</strong>!<br/>Results will be announced soon.
+      <div className={styles.lobbyWait} style={{ justifyContent: 'center', paddingTop: '10vh' }}>
+        <div className="premium-card" style={{ maxWidth: 640, textAlign: 'center', background: 'linear-gradient(135deg, rgba(20,20,30,0.9), rgba(10,10,15,0.95))' }}>
+          <h1 className="gradient-text" style={{ fontSize: '3rem', marginBottom: '1rem' }}>Turing Test Finalized</h1>
+          <p style={{ margin: '1.5rem 0', color: 'rgba(255,255,255,0.8)', fontSize: '1.1rem', lineHeight: 1.6 }}>
+            Thank you for participating, <strong>{teamName}</strong>!<br/>
+            {gameState.showFinalLeaderboard ? "The final rankings are now available!" : "The organizer will reveal the final rankings shortly."}
           </p>
-          <button className={styles.leaveBtn} onClick={handleLogout}>Leave &amp; Logout</button>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center', marginTop: '2rem' }}>
+            <button 
+              className={styles.startBtn} 
+              disabled={!gameState.showFinalLeaderboard}
+              onClick={() => router.push('/leaderboard')}
+              style={{ 
+                width: '100%', 
+                maxWidth: '400px',
+                opacity: gameState.showFinalLeaderboard ? 1 : 0.5,
+                cursor: gameState.showFinalLeaderboard ? 'pointer' : 'not-allowed',
+                background: 'linear-gradient(135deg, #a855f7, #0070f3)',
+                padding: '1.2rem',
+                fontSize: '1.1rem',
+                fontWeight: 800,
+                border: 'none',
+                borderRadius: '12px'
+              }}
+            >
+              📊 {gameState.showFinalLeaderboard ? 'View Final Rankings' : 'Leaderboard Pending...'}
+            </button>
+            <button className={styles.leaveBtn} onClick={handleLogout} style={{ opacity: 0.7, border: '1px solid rgba(255,255,255,0.1)' }}>Logout from Event</button>
+          </div>
         </div>
       </div>
     );

@@ -7,8 +7,8 @@ import { TeamProvider } from "@/context/TeamContext";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Turing Test – PR Detective",
-  description: "Identify if the PR was authored by a Human or AI",
+  title: "Turing Test – Multimedia & PR Detective",
+  description: "Round 1: Detect AI vs Human multimedia content. Round 2: Analyze PR code reviews. A competitive real-time event.",
 };
 
 export default function RootLayout({

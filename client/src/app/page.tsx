@@ -24,15 +24,15 @@ export default function Home() {
         <h1 className={`${styles.title} gradient-text`}>Turing Test</h1>
 
         <p className={styles.description}>
-          Step into the role of a PR Detective. Analyze code reviews, identify the
-          true authors (Human or AI), and prove your intuition in this competitive event.
+          Can you outsmart AI? Battle across two rounds — detect AI-generated
+          multimedia content at speed, then dissect Pull Requests like a detective.
         </p>
 
         <button
           className={styles.loginBtn}
           onClick={() => router.push('/join')}
         >
-          Login to start
+          Enter the Event →
         </button>
       </div>
     </main>

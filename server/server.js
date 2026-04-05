@@ -432,8 +432,15 @@ io.on('connection', (socket) => {
       const timerTotal = state.timerTotal || question.timerDuration;
       const responseTime = Math.max(0, timerTotal - state.timerRemaining);
 
-      // Points awarded as per admin setting (no speed bonus as requested)
-      let score = isCorrect ? question.maxPoints : 0;
+      // --- SPEED-BASED SCORING ---
+      // 50% of points are guaranteed if correct (Accuracy), 
+      // the other 50% are awarded based on speed (Remaining Time).
+      let score = 0;
+      if (isCorrect) {
+        const basePoints = Math.floor(question.maxPoints * 0.5);
+        const speedBonus = Math.floor(question.maxPoints * 0.5 * (state.timerRemaining / timerTotal));
+        score = basePoints + speedBonus;
+      }
 
 
       await R1Response.findOneAndUpdate(

@@ -24,7 +24,7 @@ export default function LeaderboardPage() {
         const response = await fetch(`${SERVER_URL}/api/combined-leaderboard`, { cache: 'no-store' });
         if (!response.ok) throw new Error('Failed to fetch leaderboard');
         const data = await response.json();
-        setLeaderboard(data);
+        setLeaderboard(data.slice(0, 10)); // Only show Top 10
       } catch (err: any) {
         setError(err.message);
       } finally {
@@ -38,7 +38,7 @@ export default function LeaderboardPage() {
   return (
     <div className={styles.container}>
       <h1 className={styles.title}>Final Turing Test Rankings</h1>
-      
+      <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.45)', marginTop: '-0.5rem', marginBottom: '1.5rem', fontSize: '0.9rem', letterSpacing: '0.05em' }}>🏆 Top 10 Teams</p>
       {loading ? (
         <div className={styles.loading}>Loading Final Results...</div>
       ) : error ? (

@@ -7,6 +7,10 @@ const cors = require('cors');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cloudinary = require('cloudinary').v2;
 
+// Scoring utilities
+const ScoringQueue = require('./utils/scoringQueue');
+const { getCandidateTeams } = require('./utils/selectionHelper');
+
 // Round 2 models
 const Question = require('./models/Question');
 const Team = require('./models/Team');
@@ -719,17 +723,27 @@ app.get('/api/export-csv', async (req, res) => {
 });
 
 // Prompt Gemini for a single response — with retry logic for 429 errors
-async function evaluateResponse(responseDoc, questionDoc, retryCount = 0) {
+/**
+ * evaluateResponse — Calls Gemini to score a single R2 reasoning response.
+ * Retry logic is handled by ScoringQueue; this function only makes one attempt.
+ * Throws on failure so the queue can retry or handle graceful degradation.
+ */
+async function evaluateResponse(responseDoc, questionDoc) {
   if (!process.env.GEMINI_API_KEY) {
-    console.warn('Skipping LLM scoring: GEMINI_API_KEY not set.');
+    console.warn('[Scorer] Skipping LLM scoring: GEMINI_API_KEY not set.');
     return;
   }
 
-  // Skip auto-submitted empty responses
-  if (responseDoc.selection === 'None' || !responseDoc.reasoning || responseDoc.reasoning === 'No answer provided.') {
+  // Skip auto-submitted or blank responses — mark as 0 immediately
+  if (
+    responseDoc.selection === 'None' ||
+    !responseDoc.reasoning ||
+    responseDoc.reasoning === 'No answer provided.'
+  ) {
     responseDoc.llmScore = 0;
     responseDoc.llmReasoning = 'No answer provided by team.';
     await responseDoc.save();
+    console.log(`[Scorer] ⏭  Blank response ${responseDoc._id} — scored 0.`);
     return;
   }
 
@@ -738,126 +752,167 @@ async function evaluateResponse(responseDoc, questionDoc, retryCount = 0) {
 
   const prompt = `You are a strict, completely unbiased, and deterministic technical judge grading a student participant's answer in a Turing Test coding game.
 
-Context: 
+Context:
 Question: "${questionDoc.title}"
+Correct Answer (Ground Truth): ${questionDoc.correctOption}
 Code (${questionDoc.language}):
 ${questionDoc.codeSnippet.substring(0, 1000)}
 
 Student's Answer:
-Selection: ${responseDoc.selection || "None"}
+Classification: ${responseDoc.selection || 'None'}
 Confidence Level: ${responseDoc.confidence} (out of 5)
 Reasoning: "${responseDoc.reasoning}"
 Understanding of Code: "${responseDoc.understanding}"
 
 GRADING RUBRIC (Assign a score from 0 to 10 strictly based on this criteria, accounting for confidence):
-- Score 0: They did not provide an answer or the reasoning is entirely incorrect and contradicts the code.
-- Score 2-4: The reasoning is generic with no specific reference to the code provided. High confidence (4-5) on a generic answer should lean closer to 2; low confidence (1-2) can lean toward 4.
-- Score 5-7: They correctly identify basic traits (e.g., naming, loops) but lack deeper technical depth.
-- Score 8-10: They offer precise, technically sound reasoning. A high confidence (4-5) combined with precise reasoning earns a 9-10. Low confidence on good reasoning earns an 8.
+- Score 0: They did not provide an answer or the reasoning entirely contradicts the code.
+- Score 2-4: The reasoning is generic with no specific reference to the code. High confidence (4-5) on a generic answer leans toward 2; low confidence (1-2) can lean toward 4.
+- Score 5-7: They correctly identify basic traits (naming, loops) but lack deeper technical depth.
+- Score 8-10: They offer precise, technically sound reasoning. High confidence (4-5) with precise reasoning earns 9-10. Low confidence on good reasoning earns 8.
 
-You MUST be objective. Output STRICTLY valid JSON ONLY. (MAX 2 LINES for "reasoning"). Example: {"score": 8, "reasoning": "Properly identified that the brute-force methodology is typical of inexperienced students, albeit with low confidence."}`;
+You MUST be objective. Output STRICTLY valid JSON ONLY (MAX 2 LINES for "reasoning").
+Example: {"score": 8, "reasoning": "Properly identified brute-force patterns typical of inexperienced students."}`;
 
-  try {
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0 }
-    });
+  console.log(`[Scorer] 🤖 Calling Gemini for response ${responseDoc._id}...`);
+  const result = await model.generateContent({
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json', temperature: 0 }
+  });
 
-    const rawOutput = result.response.text();
-    const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON block found in AI score response');
+  const rawOutput = result.response.text();
+  const jsonMatch = rawOutput.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('No JSON block found in Gemini response');
 
-    console.log('LLM Scorer Output:', jsonMatch[0]);
-    const parsed = JSON.parse(jsonMatch[0]);
+  console.log('[Scorer] 📨 Gemini output:', jsonMatch[0]);
+  const parsed = JSON.parse(jsonMatch[0]);
 
-    responseDoc.llmScore = typeof parsed.score === 'number' ? parsed.score : (Number(parsed.score) || 0);
-    responseDoc.llmReasoning = parsed.reasoning || "No reasoning provided by LLM.";
-    await responseDoc.save();
-    console.log(`Scored team: ${responseDoc.teamId?.name || responseDoc.teamId} → ${responseDoc.llmScore}/10`);
-  } catch (err) {
-    // Retry on 429 with exponential backoff (up to 3 retries)
-    if (err.message.includes('429') && retryCount < 3) {
-      const waitTime = Math.pow(2, retryCount + 1) * 5000; // 10s, 20s, 40s
-      console.warn(`Rate limited. Retrying in ${waitTime / 1000}s (attempt ${retryCount + 1}/3)...`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      return evaluateResponse(responseDoc, questionDoc, retryCount + 1);
-    }
-    console.error(`LLM Eval Error [${responseDoc._id}]:`, err.message);
-    // Don't set llmScore to 0 on transient errors — leave as null so it can be retried
-    if (err.message.includes('429') || err.message.includes('503')) {
-      console.warn('  → Leaving score as null for future retry.');
-    } else {
-      responseDoc.llmScore = 0;
-      responseDoc.llmReasoning = "API ERROR: " + err.message;
-      await responseDoc.save();
-    }
-  }
+  responseDoc.llmScore = typeof parsed.score === 'number' ? parsed.score : (Number(parsed.score) || 0);
+  responseDoc.llmReasoning = parsed.reasoning || 'No reasoning provided by LLM.';
+  await responseDoc.save();
+  console.log(`[Scorer] ✅ Scored ${responseDoc._id} → ${responseDoc.llmScore}/10`);
 }
 
-// Manually trigger scoring with batching for 75+ teams
-// Gemini 2.5 Flash free tier: 10 RPM, 250 RPD
+// ─────────────────────────────────────────────────────────────────────────────
+// Optimized AI Scoring — Candidate Selection + Async Queue
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Configuration via environment variables:
+//   AI_SELECTION_LIMIT        — max teams to AI-score (absolute number)
+//   AI_SELECTION_THRESHOLD_PCT— top X% of teams to AI-score (e.g. 30 = top 30%)
+//   AI_BATCH_SIZE             — responses per batch  (default: 2)
+//   AI_BATCH_DELAY_MS         — ms between batches   (default: 8000)
+//   AI_MAX_RETRIES            — retries on 429/503   (default: 3)
+//
+// If neither AI_SELECTION_LIMIT nor AI_SELECTION_THRESHOLD_PCT is set,
+// ALL teams with actual responses will be AI-scored (preserves old behaviour).
+
+
 app.post('/api/score-responses', async (req, res) => {
   try {
-    // --- TOP 10 FINALIST SELECTION ---
-    // Only score technical reasoning for the TOP 10 based on Accuracy (R1 points + R2 base points)
-    
-    // 1. Calculate current accuracy scores for all teams
-    const allR1 = await R1Response.find();
-    const allR2 = await Response.find().populate('questionId');
-    const totals = {};
-    
-    allR1.forEach(r => { 
-      const tid = r.teamId.toString();
-      totals[tid] = (totals[tid] || 0) + (r.score || 0);
-    });
-    allR2.forEach(r => {
-      if (!r.questionId) return;
-      const tid = r.teamId.toString();
-      const base = r.selection === r.questionId.correctOption ? 10 : 0;
-      totals[tid] = (totals[tid] || 0) + base;
-    });
+    // ── 0. Prevent premature scoring ──────────────────────────────────────────
+    const r1State = await R1GameState.findOne();
+    const r2State = await GameState.findOne();
 
-    // 2. Identify top 10 team IDs
-    const top10Ids = Object.entries(totals)
-      .sort((a,b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(entry => entry[0]);
+    if (r1State?.status !== 'FINISHED' || r2State?.status !== 'FINISHED') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot start AI scoring until BOTH Round 1 and Round 2 are completed.'
+      });
+    }
 
-    // 3. Select only responses from these top 10 teams
-    const responses = await Response.find({
-      teamId: { $in: top10Ids },
+    // ── 1. Find all unscored, non-blank R2 responses ──────────────────────────
+    const allUnscored = await Response.find({
       llmScore: null,
       selection: { $ne: 'None' }
     }).populate('questionId').populate('teamId');
 
-    if (!responses.length) {
-      return res.json({ success: true, scored: 0, message: 'Top 10 are already scored or have no answers.' });
+    if (!allUnscored.length) {
+      return res.json({ success: true, scored: 0, message: 'All responses are already scored.' });
     }
 
-    console.log(`\n🎯 Finalist Evaluation: Scoring ${responses.length} responses for the TOP 10 teams...`);
-    res.json({ success: true, scoring: responses.length, message: `Scoring Top 10 in progress...` });
+    // ── 2. Candidate selection ─────────────────────────────────────────────────
+    const selectionLimit = process.env.AI_SELECTION_LIMIT
+      ? Number(process.env.AI_SELECTION_LIMIT)
+      : null;
+    const selectionPct = process.env.AI_SELECTION_THRESHOLD_PCT
+      ? Number(process.env.AI_SELECTION_THRESHOLD_PCT)
+      : null;
 
-    let scored = 0;
-    let errors = 0;
+    console.log(
+      `\n[Selection] 🔎 Ranking teams (limit=${selectionLimit ?? 'none'}, pct=${selectionPct ?? 'none'}%)...`
+    );
 
-    // Process in batches of 2 with 2s wait (Safe for Top 10)
-    for (let i = 0; i < responses.length; i += 2) {
-      const batch = responses.slice(i, i + 2);
-      const results = await Promise.allSettled(
-        batch.map(r => r.questionId ? evaluateResponse(r, r.questionId) : Promise.resolve())
-      );
-      results.forEach(r => { if (r.status === 'fulfilled') scored++; else errors++; });
+    const candidateTeamIds = await getCandidateTeams(selectionLimit, selectionPct);
 
-      if (i + 2 < responses.length) {
-        console.log(`  Batch done. Waiting 2s...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log(`[Selection] ✅ Selected ${candidateTeamIds.size} team(s) for AI evaluation.`);
+
+    // ── 3. Partition: selected vs. non-selected ───────────────────────────────
+    const toScore = [];
+    const toSkip = [];
+
+    for (const r of allUnscored) {
+      if (!r.teamId || !r.questionId) continue;
+      const tid = r.teamId._id.toString();
+      if (candidateTeamIds.has(tid)) {
+        toScore.push(r);
+      } else {
+        toSkip.push(r);
       }
     }
-    console.log(`\n✅ Finalist Scoring complete: ${scored} scored.`);
+
+    console.log(`[Selection] 📊 AI queue: ${toScore.length} | Skipped (default 0): ${toSkip.length}`);
+
+    // ── 4. Fast-track non-selected: mark llmScore=0 immediately ──────────────
+    //    This keeps the leaderboard consistent without Gemini calls.
+    //    Using a generic response to keep the selective filter hidden from participants.
+    if (toSkip.length > 0) {
+      const skipIds = toSkip.map(r => r._id);
+      await Response.updateMany(
+        { _id: { $in: skipIds }, llmScore: null },
+        { $set: { llmScore: 0, llmReasoning: 'The reasoning provided lacked sufficient technical depth or specific references to the codebase to warrant additional points.' } }
+      );
+      console.log(`[Selection] ⚡ Fast-tracked ${toSkip.length} non-selected responses (llmScore=0).`);
+    }
+
+    // ── 5. Return immediately so admin isn't blocked ──────────────────────────
+    res.json({
+      success: true,
+      message: `AI scoring started for ${toScore.length} selected response(s). ${toSkip.length} skipped.`,
+      selected: toScore.length,
+      skipped: toSkip.length
+    });
+
+    if (!toScore.length) return;
+
+    // ── 6. Build and start the async queue ───────────────────────────────────
+    const queue = new ScoringQueue({
+      evaluateFn: evaluateResponse,
+      onScored: async (scoredResponse) => {
+        // Push a leaderboard refresh to all connected clients after each score
+        try {
+          io.emit('leaderboard-updated', { responseId: scoredResponse._id.toString() });
+        } catch (e) {
+          console.error('[Queue] Failed to emit leaderboard-updated:', e.message);
+        }
+      }
+    });
+
+    const items = toScore
+      .filter(r => r.questionId)
+      .map(r => ({ responseDoc: r, questionDoc: r.questionId }));
+
+    queue.enqueue(items);
+    queue.start();
+
   } catch (err) {
-    console.error('Manual scoring failure:', err.message);
-    if (!res.headersSent) res.status(500).json({ error: 'Scoring failed' });
+    console.error('[Score-Responses] ❌ Error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Scoring failed: ' + err.message });
   }
+});
+
+// Status check endpoint — lets admin poll whether queue is still running
+app.get('/api/score-status', (req, res) => {
+  res.json({ message: 'Use the /api/score-responses POST endpoint to trigger scoring.' });
 });
 
 // Calculate Leaderboard

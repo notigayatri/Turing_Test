@@ -43,7 +43,8 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -107,7 +108,7 @@ const broadcastState = async () => {
 
 const startTimer = () => {
   if (gameTimer) clearTimeout(gameTimer);
-  
+
   const tick = async () => {
     const state = await syncGameState();
     if (state.status === 'IN_PROGRESS' && !state.isPaused && state.phase === 'QUESTION') {
@@ -330,7 +331,7 @@ io.on('connection', (socket) => {
       if (state.status !== 'IN_PROGRESS' || (!isGracePeriod && state.phase !== 'QUESTION')) {
         return socket.emit('error', 'Submissions are locked.');
       }
-      
+
       const team = await Team.findById(data.teamId);
       if (!team) return socket.emit('error', 'Team not found.');
 
@@ -570,7 +571,7 @@ const autoSubmitR1Missing = async (questionId) => {
 
 const startR1Timer = () => {
   if (r1Timer) clearTimeout(r1Timer);
-  
+
   const tick = async () => {
     const state = await syncR1State();
     if (state.status === 'IN_PROGRESS' && !state.isPaused && state.phase === 'QUESTION') {
@@ -772,16 +773,16 @@ You MUST be objective. Output STRICTLY valid JSON ONLY. (MAX 2 LINES for "reason
     responseDoc.llmScore = typeof parsed.score === 'number' ? parsed.score : (Number(parsed.score) || 0);
     responseDoc.llmReasoning = parsed.reasoning || "No reasoning provided by LLM.";
     await responseDoc.save();
-    console.log(`✅ Scored team: ${responseDoc.teamId?.name || responseDoc.teamId} → ${responseDoc.llmScore}/10`);
+    console.log(`Scored team: ${responseDoc.teamId?.name || responseDoc.teamId} → ${responseDoc.llmScore}/10`);
   } catch (err) {
     // Retry on 429 with exponential backoff (up to 3 retries)
     if (err.message.includes('429') && retryCount < 3) {
       const waitTime = Math.pow(2, retryCount + 1) * 5000; // 10s, 20s, 40s
-      console.warn(`⏳ Rate limited. Retrying in ${waitTime / 1000}s (attempt ${retryCount + 1}/3)...`);
+      console.warn(`Rate limited. Retrying in ${waitTime / 1000}s (attempt ${retryCount + 1}/3)...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
       return evaluateResponse(responseDoc, questionDoc, retryCount + 1);
     }
-    console.error(`❌ LLM Eval Error [${responseDoc._id}]:`, err.message);
+    console.error(`LLM Eval Error [${responseDoc._id}]:`, err.message);
     // Don't set llmScore to 0 on transient errors — leave as null so it can be retried
     if (err.message.includes('429') || err.message.includes('503')) {
       console.warn('  → Leaving score as null for future retry.');
@@ -797,24 +798,49 @@ You MUST be objective. Output STRICTLY valid JSON ONLY. (MAX 2 LINES for "reason
 // Gemini 2.5 Flash free tier: 10 RPM, 250 RPD
 app.post('/api/score-responses', async (req, res) => {
   try {
-    // Only find responses that genuinely need scoring:
-    // - llmScore is null (never scored)
-    // - Exclude auto-submitted blank responses (llmScore: -1) and already-scored ones
+    // --- TOP 10 FINALIST SELECTION ---
+    // Only score technical reasoning for the TOP 10 based on Accuracy (R1 points + R2 base points)
+    
+    // 1. Calculate current accuracy scores for all teams
+    const allR1 = await R1Response.find();
+    const allR2 = await Response.find().populate('questionId');
+    const totals = {};
+    
+    allR1.forEach(r => { 
+      const tid = r.teamId.toString();
+      totals[tid] = (totals[tid] || 0) + (r.score || 0);
+    });
+    allR2.forEach(r => {
+      if (!r.questionId) return;
+      const tid = r.teamId.toString();
+      const base = r.selection === r.questionId.correctOption ? 10 : 0;
+      totals[tid] = (totals[tid] || 0) + base;
+    });
+
+    // 2. Identify top 10 team IDs
+    const top10Ids = Object.entries(totals)
+      .sort((a,b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(entry => entry[0]);
+
+    // 3. Select only responses from these top 10 teams
     const responses = await Response.find({
+      teamId: { $in: top10Ids },
       llmScore: null,
-      selection: { $ne: 'None' }  // Skip teams that didn't answer
+      selection: { $ne: 'None' }
     }).populate('questionId').populate('teamId');
 
-    if (!responses.length) return res.json({ success: true, scored: 0, message: 'All responses are already scored.' });
+    if (!responses.length) {
+      return res.json({ success: true, scored: 0, message: 'Top 10 are already scored or have no answers.' });
+    }
 
-    console.log(`\n🎯 Starting scoring for ${responses.length} responses (skipping auto-submitted blanks)...`);
-    res.json({ success: true, scoring: responses.length, message: `Scoring ${responses.length} responses in background...` });
+    console.log(`\n🎯 Finalist Evaluation: Scoring ${responses.length} responses for the TOP 10 teams...`);
+    res.json({ success: true, scoring: responses.length, message: `Scoring Top 10 in progress...` });
 
-    // Process in background so admin doesn't have to wait
     let scored = 0;
     let errors = 0;
 
-    // Process in batches of 2 with 8s wait to stay under 10 RPM
+    // Process in batches of 2 with 2s wait (Safe for Top 10)
     for (let i = 0; i < responses.length; i += 2) {
       const batch = responses.slice(i, i + 2);
       const results = await Promise.allSettled(
@@ -823,11 +849,11 @@ app.post('/api/score-responses', async (req, res) => {
       results.forEach(r => { if (r.status === 'fulfilled') scored++; else errors++; });
 
       if (i + 2 < responses.length) {
-        console.log(`  Batch ${Math.floor(i/2)+1} done (${scored} scored, ${errors} errors). Waiting 8s...`);
-        await new Promise(resolve => setTimeout(resolve, 8000));
+        console.log(`  Batch done. Waiting 2s...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
-    console.log(`\n✅ Scoring complete: ${scored} scored, ${errors} errors out of ${responses.length} total.`);
+    console.log(`\n✅ Finalist Scoring complete: ${scored} scored.`);
   } catch (err) {
     console.error('Manual scoring failure:', err.message);
     if (!res.headersSent) res.status(500).json({ error: 'Scoring failed' });
